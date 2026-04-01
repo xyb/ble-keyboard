@@ -20,12 +20,16 @@ bool prevConnected = false;
 unsigned long lastBatUpdate = 0;
 unsigned long lastActivity = 0;
 unsigned long lastLedBlink = 0;
+unsigned long ledBreathStart = 0;
+bool ledBreathing = false;
 bool screenOn = true;
 
 const unsigned long BAT_INTERVAL_ACTIVE = 30000;
 const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
-const unsigned long LED_BLINK_INTERVAL = 4000;
+const unsigned long LED_BLINK_INTERVAL = 10000;
+const unsigned long LED_BREATH_DURATION = 1000;
+const int LED_BREATH_PEAK = 240;
 const int LED_PIN = 10;
 
 // --- Layout constants (landscape, setRotation 1) ---
@@ -90,6 +94,7 @@ void screenSleep() {
   if (screenOn) {
     M5.Axp.SetLDO2(false);
     screenOn = false;
+    lastLedBlink = millis();
   }
 }
 
@@ -229,12 +234,30 @@ void loop() {
     screenSleep();
   }
 
-  // Heartbeat LED when screen is off
-  if (!screenOn && (millis() - lastLedBlink >= LED_BLINK_INTERVAL)) {
-    lastLedBlink = millis();
-    digitalWrite(LED_PIN, LOW);
-    delay(15);
-    digitalWrite(LED_PIN, HIGH);
+  // Heartbeat LED: breathing effect when screen is off
+  if (!screenOn) {
+    if (!ledBreathing && (millis() - lastLedBlink >= LED_BLINK_INTERVAL)) {
+      ledBreathing = true;
+      ledBreathStart = millis();
+    }
+    if (ledBreathing) {
+      unsigned long elapsed = millis() - ledBreathStart;
+      if (elapsed >= LED_BREATH_DURATION) {
+        analogWrite(LED_PIN, 255);
+        ledBreathing = false;
+        lastLedBlink = millis();
+      } else {
+        unsigned long half = LED_BREATH_DURATION / 2;
+        float progress = (elapsed < half)
+          ? (float)elapsed / half
+          : 1.0f - (float)(elapsed - half) / half;
+        int pwm = 255 - (int)((255 - LED_BREATH_PEAK) * progress);
+        analogWrite(LED_PIN, pwm);
+      }
+    }
+  } else if (ledBreathing) {
+    analogWrite(LED_PIN, 255);
+    ledBreathing = false;
   }
 
   // Battery refresh: 30s when screen on, 5min when idle
