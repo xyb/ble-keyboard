@@ -57,10 +57,12 @@ void screenSleep() {
   }
 }
 
-void drawBattery() {
+void updateBattery() {
+  int pct = getBatPercent();
+  bleKeyboard.setBatteryLevel(pct);
+
   if (!screenOn) return;
   float v = M5.Axp.GetBatVoltage();
-  int pct = getBatPercent();
 
   M5.Lcd.fillRect(2, 60, 84, 18, BLACK);
   M5.Lcd.setTextSize(1);
@@ -88,7 +90,7 @@ void drawStatus() {
     M5.Lcd.setCursor(22, 34);
     M5.Lcd.setTextColor(WHITE);
     M5.Lcd.print("Waiting for pair...");
-    drawBattery();
+    updateBattery();
     return;
   }
 
@@ -126,7 +128,7 @@ void drawStatus() {
   M5.Lcd.print("Connect");
 
   // Battery
-  drawBattery();
+  updateBattery();
 }
 
 void flashPower() {
@@ -190,10 +192,10 @@ void loop() {
     screenSleep();
   }
 
-  // Battery refresh (only when screen is on)
-  if (screenOn && (millis() - lastBatUpdate >= BAT_UPDATE_INTERVAL)) {
+  // Battery refresh (BLE level always, LCD only when screen is on)
+  if (millis() - lastBatUpdate >= BAT_UPDATE_INTERVAL) {
     lastBatUpdate = millis();
-    drawBattery();
+    updateBattery();
   }
 
   // Button B (top edge, GPIO39): wake screen only
