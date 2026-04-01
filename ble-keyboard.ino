@@ -9,7 +9,8 @@ unsigned long lastBatUpdate = 0;
 unsigned long lastActivity = 0;
 bool screenOn = true;
 
-const unsigned long BAT_UPDATE_INTERVAL = 30000;
+const unsigned long BAT_INTERVAL_ACTIVE = 30000;
+const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
 
 // rotation(1): 160x80, USB+Grove on RIGHT, HAT exp pins on LEFT
@@ -192,8 +193,9 @@ void loop() {
     screenSleep();
   }
 
-  // Battery refresh (BLE level always, LCD only when screen is on)
-  if (millis() - lastBatUpdate >= BAT_UPDATE_INTERVAL) {
+  // Battery refresh: 30s when screen on, 5min when idle
+  unsigned long batInterval = screenOn ? BAT_INTERVAL_ACTIVE : BAT_INTERVAL_IDLE;
+  if (millis() - lastBatUpdate >= batInterval) {
     lastBatUpdate = millis();
     updateBattery();
   }
