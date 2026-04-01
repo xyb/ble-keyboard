@@ -1,7 +1,19 @@
-#include <M5StickC.h>
+// Device auto-detection via board macro (set by Arduino FQBN)
+#if defined(ARDUINO_M5STACK_STICKC_PLUS)
+  #include <M5StickCPlus.h>
+  #define SCREEN_W      240
+  #define SCREEN_H      135
+  #define DEVICE_NAME   "M5SCP-KB"
+#else
+  #include <M5StickC.h>
+  #define SCREEN_W      160
+  #define SCREEN_H      80
+  #define DEVICE_NAME   "M5StickC-KB"
+#endif
+
 #include <BleKeyboard.h>
 
-BleKeyboard bleKeyboard("M5StickC-KB", "M5Stack", 100);
+BleKeyboard bleKeyboard(DEVICE_NAME, "M5Stack", 100);
 
 bool connected = false;
 bool prevConnected = false;
@@ -13,25 +25,45 @@ const unsigned long BAT_INTERVAL_ACTIVE = 30000;
 const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
 
-// rotation(1): 160x80, USB+Grove on RIGHT, HAT exp pins on LEFT
+// --- Layout constants (landscape, setRotation 1) ---
+// Both devices: USB+Grove on RIGHT, HAT exp pins on LEFT
+//   Button A (GPIO37) : front face, RIGHT of screen
+//   Power   (AXP192)  : bottom edge, RIGHT portion
+//   Button B (GPIO39) : top edge,    CENTER
 //
-// Physical button positions (landscape, CW 90 from vertical):
-//   Button A (GPIO37) : front face, RIGHT of screen   (x->159)
-//   Power   (AXP192)  : bottom edge, RIGHT portion    (x->159, y->79)
-//   Button B (GPIO39) : top edge,    CENTER             (x~80,   y->0)
-//   USB-C + Grove     : right edge
-//   HAT exp pins      : left edge
-//
-// Screen layout matches physical positions:
-//              [B]wk
-//               vv
-//   ┌───────────────────────────┬──────┐
-//   │                           │ Opt  │
-//   │    Connect                │ +Tab │ <- Btn A (right strip)
-//   │                           │  A   │
-//   │    85% 4.05V   ┌──────────┤      │
-//   │                │Ent [PWR] │      │ <- Power (bottom-right)
-//   └────────────────┴──────────┴──────┘
+// Button A right strip
+#define BTNA_W        (SCREEN_W * 23 / 100)
+#define BTNA_X        (SCREEN_W - BTNA_W)
+#define BTNA_H        (SCREEN_H * 70 / 100)
+
+// Button B top-center indicator
+#define BTNB_W        (SCREEN_W / 4)
+#define BTNB_H        (SCREEN_H * 18 / 100)
+#define BTNB_X        ((SCREEN_W - BTNB_W) / 2)
+
+// Power button bottom-right block
+#define PWR_H         (SCREEN_H * 28 / 100)
+#define PWR_W         (SCREEN_W * 45 / 100)
+#define PWR_X         (SCREEN_W - PWR_W)
+#define PWR_Y         (SCREEN_H - PWR_H)
+
+// Battery display bottom-left
+#define BAT_Y         (SCREEN_H - 18)
+
+// Status text
+#if SCREEN_W >= 240
+  #define STATUS_SIZE   3
+  #define STATUS_Y      (SCREEN_H / 3)
+  #define FLASH_SIZE    4
+  #define TITLE_SIZE    3
+  #define BAT_SIZE      2
+#else
+  #define STATUS_SIZE   2
+  #define STATUS_Y      (SCREEN_H / 3)
+  #define FLASH_SIZE    3
+  #define TITLE_SIZE    2
+  #define BAT_SIZE      1
+#endif
 
 int getBatPercent() {
   float v = M5.Axp.GetBatVoltage();
@@ -65,8 +97,8 @@ void updateBattery() {
   if (!screenOn) return;
   float v = M5.Axp.GetBatVoltage();
 
-  M5.Lcd.fillRect(2, 60, 84, 18, BLACK);
-  M5.Lcd.setTextSize(1);
+  M5.Lcd.fillRect(2, BAT_Y - 2, BTNA_X - 4, 20, BLACK);
+  M5.Lcd.setTextSize(BAT_SIZE);
 
   if (pct > 50)      M5.Lcd.setTextColor(GREEN);
   else if (pct > 20) M5.Lcd.setTextColor(YELLOW);
@@ -74,7 +106,7 @@ void updateBattery() {
 
   char buf[16];
   snprintf(buf, sizeof(buf), "%d%%  %.2fV", pct, v);
-  M5.Lcd.setCursor(4, 64);
+  M5.Lcd.setCursor(4, BAT_Y);
   M5.Lcd.print(buf);
 }
 
@@ -83,52 +115,50 @@ void drawStatus() {
   M5.Lcd.fillScreen(BLACK);
 
   if (!connected) {
-    M5.Lcd.setTextSize(2);
-    M5.Lcd.setCursor(20, 10);
+    M5.Lcd.setTextSize(TITLE_SIZE);
+    M5.Lcd.setCursor(SCREEN_W / 8, SCREEN_H / 6);
     M5.Lcd.setTextColor(YELLOW);
     M5.Lcd.print("BLE KB");
     M5.Lcd.setTextSize(1);
-    M5.Lcd.setCursor(22, 34);
+    M5.Lcd.setCursor(SCREEN_W / 8, SCREEN_H / 2);
     M5.Lcd.setTextColor(WHITE);
     M5.Lcd.print("Waiting for pair...");
     updateBattery();
     return;
   }
 
-  // Top-center: Button B indicator (physically top edge, center)
-  M5.Lcd.fillRoundRect(42, 0, 40, 14, 3, 0x4208);
+  // Top-center: Button B indicator
+  M5.Lcd.fillRoundRect(BTNB_X, 0, BTNB_W, BTNB_H, 3, 0x4208);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(46, 3);
+  M5.Lcd.setCursor(BTNB_X + 4, BTNB_H / 4);
   M5.Lcd.print("[B]wk");
 
-  // Right strip: Button A (physically right of screen, front face)
-  M5.Lcd.fillRoundRect(124, 0, 36, 56, 4, CYAN);
+  // Right strip: Button A
+  M5.Lcd.fillRoundRect(BTNA_X, 0, BTNA_W, BTNA_H, 4, CYAN);
   M5.Lcd.setTextColor(BLACK);
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(128, 8);
+  M5.Lcd.setCursor(BTNA_X + 4, BTNA_H / 6);
   M5.Lcd.print("Opt");
-  M5.Lcd.setCursor(128, 20);
+  M5.Lcd.setCursor(BTNA_X + 4, BTNA_H / 6 + 14);
   M5.Lcd.print("+Tab");
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(136, 36);
+  M5.Lcd.setCursor(BTNA_X + (BTNA_W - 12) / 2, BTNA_H / 2);
   M5.Lcd.print("A");
 
-  // Bottom-right: Power button (physically bottom edge, right portion)
-  M5.Lcd.fillRoundRect(88, 58, 72, 22, 4, MAGENTA);
+  // Bottom-right: Power button
+  M5.Lcd.fillRoundRect(PWR_X, PWR_Y, PWR_W, PWR_H, 4, MAGENTA);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(92, 65);
+  M5.Lcd.setCursor(PWR_X + 4, PWR_Y + PWR_H / 4);
   M5.Lcd.print("Enter[PWR]");
 
-  // Center: status
-  M5.Lcd.setTextSize(1);
+  // Center-left: connection status
   M5.Lcd.setTextColor(GREEN);
-  M5.Lcd.setCursor(4, 24);
-  M5.Lcd.setTextSize(2);
+  M5.Lcd.setTextSize(STATUS_SIZE);
+  M5.Lcd.setCursor(4, STATUS_Y);
   M5.Lcd.print("Connect");
 
-  // Battery
   updateBattery();
 }
 
@@ -139,9 +169,9 @@ void flashPower() {
     screenOn = true;
   }
   M5.Lcd.fillScreen(MAGENTA);
-  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextSize(FLASH_SIZE);
   M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor(20, 25);
+  M5.Lcd.setCursor(SCREEN_W / 8, SCREEN_H / 3);
   M5.Lcd.print("Enter");
   delay(300);
   drawStatus();
@@ -155,9 +185,9 @@ void flashBtnA() {
     screenOn = true;
   }
   M5.Lcd.fillScreen(CYAN);
-  M5.Lcd.setTextSize(3);
+  M5.Lcd.setTextSize(FLASH_SIZE);
   M5.Lcd.setTextColor(BLACK);
-  M5.Lcd.setCursor(4, 25);
+  M5.Lcd.setCursor(SCREEN_W / 16, SCREEN_H / 3);
   M5.Lcd.print("Opt+Tab");
   delay(500);
   drawStatus();
