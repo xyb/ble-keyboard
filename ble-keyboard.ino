@@ -117,8 +117,8 @@ void drawStatus() {
 
   // Center: connection status
   M5.Lcd.setTextColor(GREEN);
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor((135 - 162) / 2, 90);
+  M5.Lcd.setTextSize(2);
+  M5.Lcd.setCursor((135 - 108) / 2, 95);
   M5.Lcd.print("Connected");
 
   // Bottom block: Power button (Enter)
