@@ -3,7 +3,7 @@
   #include <M5StickCPlus.h>
   #define SCREEN_W      240
   #define SCREEN_H      135
-  #define DEVICE_NAME   "M5SCP-KB"
+  #define DEVICE_NAME   "M5StickCP-KB"
 #else
   #include <M5StickC.h>
   #define SCREEN_W      160
@@ -19,11 +19,14 @@ bool connected = false;
 bool prevConnected = false;
 unsigned long lastBatUpdate = 0;
 unsigned long lastActivity = 0;
+unsigned long lastLedBlink = 0;
 bool screenOn = true;
 
 const unsigned long BAT_INTERVAL_ACTIVE = 30000;
 const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
+const unsigned long LED_BLINK_INTERVAL = 4000;
+const int LED_PIN = 10;
 
 // --- Layout constants (landscape, setRotation 1) ---
 // Both devices: USB+Grove on RIGHT, HAT exp pins on LEFT
@@ -201,6 +204,9 @@ void setup() {
   M5.Lcd.setRotation(1);
   M5.Lcd.fillScreen(BLACK);
 
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);
+
   bleKeyboard.begin();
   drawStatus();
   lastActivity = millis();
@@ -221,6 +227,14 @@ void loop() {
   // Auto screen off
   if (screenOn && (millis() - lastActivity >= SCREEN_TIMEOUT)) {
     screenSleep();
+  }
+
+  // Heartbeat LED when screen is off
+  if (!screenOn && (millis() - lastLedBlink >= LED_BLINK_INTERVAL)) {
+    lastLedBlink = millis();
+    digitalWrite(LED_PIN, LOW);
+    delay(15);
+    digitalWrite(LED_PIN, HIGH);
   }
 
   // Battery refresh: 30s when screen on, 5min when idle
