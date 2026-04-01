@@ -22,15 +22,15 @@ const unsigned long SCREEN_TIMEOUT = 5000;
 //   HAT exp pins      : left edge
 //
 // Screen layout matches physical positions:
-//   BtnB
-//   vv
-//   ┌──────────────────────────────┬────────┐
-//   │                              │ Opt    │
-//   │    Connected                 │ +Tab   │ <- Btn A (right)
-//   │    85% 4.05V                 │  [A]   │
-//   │                   ┌──────────┤        │
-//   │                   │Ent [PWR] │        │ <- Power (bottom-right)
-//   └───────────────────┴──────────┴────────┘
+//              [B]wk
+//               vv
+//   ┌───────────────────────────┬──────┐
+//   │                           │ Opt  │
+//   │    Connect                │ +Tab │ <- Btn A (right strip)
+//   │                           │  A   │
+//   │    85% 4.05V   ┌──────────┤      │
+//   │                │Ent [PWR] │      │ <- Power (bottom-right)
+//   └────────────────┴──────────┴──────┘
 
 int getBatPercent() {
   float v = M5.Axp.GetBatVoltage();
@@ -42,6 +42,7 @@ int getBatPercent() {
 
 void screenWake() {
   if (!screenOn) {
+    M5.Axp.SetLDO2(true);
     M5.Axp.ScreenBreath(80);
     screenOn = true;
     drawStatus();
@@ -51,7 +52,7 @@ void screenWake() {
 
 void screenSleep() {
   if (screenOn) {
-    M5.Axp.ScreenBreath(0);
+    M5.Axp.SetLDO2(false);
     screenOn = false;
   }
 }
@@ -107,8 +108,8 @@ void drawStatus() {
   M5.Lcd.setCursor(128, 20);
   M5.Lcd.print("+Tab");
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(133, 36);
-  M5.Lcd.print("[A]");
+  M5.Lcd.setCursor(136, 36);
+  M5.Lcd.print("A");
 
   // Bottom-right: Power button (physically bottom edge, right portion)
   M5.Lcd.fillRoundRect(88, 58, 72, 22, 4, MAGENTA);
@@ -130,6 +131,7 @@ void drawStatus() {
 
 void flashPower() {
   if (!screenOn) {
+    M5.Axp.SetLDO2(true);
     M5.Axp.ScreenBreath(80);
     screenOn = true;
   }
@@ -145,6 +147,7 @@ void flashPower() {
 
 void flashBtnA() {
   if (!screenOn) {
+    M5.Axp.SetLDO2(true);
     M5.Axp.ScreenBreath(80);
     screenOn = true;
   }
