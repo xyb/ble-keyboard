@@ -27,6 +27,8 @@ bool ledBreathing = false;
 bool screenOn = true;
 unsigned long lastPowerCheck = 0;
 int lastPowerCheckBat = -1;
+bool warnedAt20 = false;
+bool warnedAt10 = false;
 
 const unsigned long BAT_INTERVAL_ACTIVE = 30000;
 const unsigned long BAT_INTERVAL_IDLE = 300000;
@@ -34,10 +36,25 @@ const unsigned long SCREEN_TIMEOUT = 5000;
 const unsigned long POWEROFF_TIMEOUT = 1800000;
 const int LOWBAT_THRESHOLD = 5;
 const int CHARGING_DROP_MARGIN = 2;
+const int BUZZER_FREQ = 2500;
 const unsigned long LED_BLINK_INTERVAL = 10000;
 const unsigned long LED_BREATH_DURATION = 1000;
 const int LED_BREATH_PEAK = 240;
 const int LED_PIN = 10;
+
+void beepLowBattery() {
+  M5.Beep.tone(BUZZER_FREQ, 150);
+  delay(200);
+  M5.Beep.tone(BUZZER_FREQ, 150);
+  delay(200);
+  M5.Beep.mute();
+}
+
+void beepPowerOff() {
+  M5.Beep.tone(BUZZER_FREQ, 800);
+  delay(900);
+  M5.Beep.mute();
+}
 
 int getBatPercent() {
   float v = M5.Axp.GetBatVoltage();
@@ -321,6 +338,10 @@ void setup() {
   lastBatUpdate = millis();
   lastPowerCheck = millis();
   lastPowerCheckBat = getBatPercent();
+
+  beepLowBattery();
+  delay(800);
+  beepPowerOff();
 }
 
 void loop() {
@@ -344,9 +365,11 @@ void loop() {
       && millis() - lastPowerCheck >= POWEROFF_TIMEOUT) {
     int curBat = getBatPercent();
     if (curBat < LOWBAT_THRESHOLD) {
+      beepPowerOff();
       M5.Axp.PowerOff();
     }
     if (curBat <= lastPowerCheckBat - CHARGING_DROP_MARGIN) {
+      beepPowerOff();
       M5.Axp.PowerOff();
     }
     lastPowerCheck = millis();
@@ -384,6 +407,17 @@ void loop() {
   if (millis() - lastBatUpdate >= batInterval) {
     lastBatUpdate = millis();
     updateBattery();
+
+    int pct = getBatPercent();
+    if (pct <= 20 && pct > 10 && !warnedAt20) {
+      warnedAt20 = true;
+      beepLowBattery();
+    } else if (pct <= 10 && !warnedAt10) {
+      warnedAt10 = true;
+      beepLowBattery();
+    }
+    if (pct > 20) { warnedAt20 = false; warnedAt10 = false; }
+    else if (pct > 10) { warnedAt10 = false; }
   }
 
   // Button B: wake screen only
