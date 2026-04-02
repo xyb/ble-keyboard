@@ -25,10 +25,15 @@ unsigned long lastLedBlink = 0;
 unsigned long ledBreathStart = 0;
 bool ledBreathing = false;
 bool screenOn = true;
+unsigned long lastPowerCheck = 0;
+int lastPowerCheckBat = -1;
 
 const unsigned long BAT_INTERVAL_ACTIVE = 30000;
 const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
+const unsigned long POWEROFF_TIMEOUT = 1800000;
+const int LOWBAT_THRESHOLD = 5;
+const int CHARGING_DROP_MARGIN = 2;
 const unsigned long LED_BLINK_INTERVAL = 10000;
 const unsigned long LED_BREATH_DURATION = 1000;
 const int LED_BREATH_PEAK = 240;
@@ -50,6 +55,8 @@ void screenWake() {
     drawStatus();
   }
   lastActivity = millis();
+  lastPowerCheck = millis();
+  lastPowerCheckBat = getBatPercent();
 }
 
 void screenSleep() {
@@ -312,6 +319,8 @@ void setup() {
   drawStatus();
   lastActivity = millis();
   lastBatUpdate = millis();
+  lastPowerCheck = millis();
+  lastPowerCheckBat = getBatPercent();
 }
 
 void loop() {
@@ -328,6 +337,20 @@ void loop() {
   // Auto screen off
   if (screenOn && (millis() - lastActivity >= SCREEN_TIMEOUT)) {
     screenSleep();
+  }
+
+  // Auto power off after 30 min idle (skip if charging)
+  if (millis() - lastActivity >= POWEROFF_TIMEOUT
+      && millis() - lastPowerCheck >= POWEROFF_TIMEOUT) {
+    int curBat = getBatPercent();
+    if (curBat < LOWBAT_THRESHOLD) {
+      M5.Axp.PowerOff();
+    }
+    if (curBat <= lastPowerCheckBat - CHARGING_DROP_MARGIN) {
+      M5.Axp.PowerOff();
+    }
+    lastPowerCheck = millis();
+    lastPowerCheckBat = curBat;
   }
 
   // Heartbeat LED: breathing effect when screen is off
