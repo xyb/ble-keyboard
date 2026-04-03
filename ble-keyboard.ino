@@ -37,23 +37,31 @@ const unsigned long POWEROFF_TIMEOUT = 1800000;
 const int LOWBAT_THRESHOLD = 5;
 const int CHARGING_DROP_MARGIN = 2;
 const int BUZZER_FREQ = 2500;
+const int BUZZER_PIN = 2;
+const bool BUZZER_TEST_ON_BOOT = false;
 const unsigned long LED_BLINK_INTERVAL = 10000;
 const unsigned long LED_BREATH_DURATION = 1000;
 const int LED_BREATH_PEAK = 240;
 const int LED_PIN = 10;
 
+void buzzerTone(int freq, int ms) {
+  tone(BUZZER_PIN, freq);
+  delay(ms);
+  noTone(BUZZER_PIN);
+}
+
 void beepLowBattery() {
-  M5.Beep.tone(BUZZER_FREQ, 150);
-  delay(200);
-  M5.Beep.tone(BUZZER_FREQ, 150);
-  delay(200);
-  M5.Beep.mute();
+  buzzerTone(BUZZER_FREQ, 150);
+  delay(100);
+  buzzerTone(BUZZER_FREQ, 150);
 }
 
 void beepPowerOff() {
-  M5.Beep.tone(BUZZER_FREQ, 800);
-  delay(900);
-  M5.Beep.mute();
+  buzzerTone(2500, 300);
+  delay(50);
+  buzzerTone(2000, 300);
+  delay(50);
+  buzzerTone(1500, 400);
 }
 
 int getBatPercent() {
@@ -332,6 +340,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
 
+
   bleKeyboard.begin();
   drawStatus();
   lastActivity = millis();
@@ -339,9 +348,11 @@ void setup() {
   lastPowerCheck = millis();
   lastPowerCheckBat = getBatPercent();
 
-  beepLowBattery();
-  delay(800);
-  beepPowerOff();
+  if (BUZZER_TEST_ON_BOOT) {
+    beepLowBattery();
+    delay(800);
+    beepPowerOff();
+  }
 }
 
 void loop() {
