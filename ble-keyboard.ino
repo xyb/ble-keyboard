@@ -255,7 +255,7 @@ void updateBattery() {
   M5Cardputer.Display.fillRect(dotX - BLE_DOT_R - BLE_DOT_CLEAR_PAD, BLE_DOT_CLEAR_PAD,
     SCREEN_W - dotX + BLE_DOT_R + BLE_DOT_CLEAR_PAD * 2, BLE_BAR_H, BLACK);
   // BLE status dot + label
-  uint16_t bleCol = connected ? GREEN : RED;
+  uint16_t bleCol = connected ? BLUE : RED;
   M5Cardputer.Display.fillCircle(dotX, BLE_DOT_Y, BLE_DOT_R, bleCol);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(DARKGREY);
@@ -408,7 +408,7 @@ void updateBattery() {
   M5.Lcd.fillRect(0, BAT_Y, SCREEN_W, BAT_AREA_H, BLACK);
 
   // BLE status dot
-  uint16_t bleCol = connected ? GREEN : RED;
+  uint16_t bleCol = connected ? BLUE : RED;
   M5.Lcd.fillCircle(BLE_DOT_X, BAT_Y + BLE_DOT_CY_OFF, BLE_DOT_R, bleCol);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(DARKGREY);
@@ -638,7 +638,7 @@ void updateBattery() {
   int batY = nameY + nameLines * FONT1_H + CONTENT_GAP;
   M5.Lcd.fillRect(0, batY, SCREEN_W, BAT_AREA_H, BLACK);
 
-  uint16_t bleCol = connected ? GREEN : RED;
+  uint16_t bleCol = connected ? BLUE : RED;
   M5.Lcd.fillCircle(BLE_DOT_X, batY + BLE_DOT_CY_OFF, BLE_DOT_R, bleCol);
 
   uint16_t batCol = pct > 50 ? GREEN : (pct > 20 ? YELLOW : RED);
