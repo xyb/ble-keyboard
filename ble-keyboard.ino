@@ -309,7 +309,7 @@ void updateBattery() {
   // Battery bar
   int barX = 44, barW = 135 - tw - barX - 8, barH = 8;
   M5.Lcd.drawRect(barX, batY + 4, barW, barH, DARKGREY);
-  M5.Lcd.fillRect(barX + 1, batY + 5, barW + 1, barH - 2, BLACK);
+  M5.Lcd.fillRect(barX + 1, batY + 5, barW - 2, barH - 2, BLACK);
   int fillW = (barW - 2) * pct / 100;
   if (fillW > 0) M5.Lcd.fillRect(barX + 1, batY + 5, fillW, barH - 2, batCol);
 }
@@ -335,21 +335,22 @@ void drawStatus() {
   int W = 135;
   int blockX = 16, blockW = 100;
   int blockH = 48, gap = 6;
-  int r = 10;  // indicator radius (large, clearly visible)
+  int r = 8;
+  int blockRight = blockX + blockW;         // 116
+  int lineX = blockRight + (W - blockRight) / 2;  // center of right margin
 
   // === Button A: full circle, top center ===
   int dotA_y = r + 2;
   M5.Lcd.fillCircle(W / 2, dotA_y, r, CYAN);
 
   // === Power: left half-circle, flush with right edge ===
-  // Center at (W-1) so left half is visible on screen
   M5.Lcd.fillCircle(W - 1, dotA_y, r, MAGENTA);
 
   // Line from A dot down to block A
   int blockA_y = dotA_y + r + 6;
   M5.Lcd.drawLine(W / 2, dotA_y + r, W / 2, blockA_y, CYAN);
 
-  // Block A — all text size 2, centered
+  // Block A
   M5.Lcd.fillRoundRect(blockX, blockA_y, blockW, blockH, 4, CYAN);
   M5.Lcd.setTextColor(BLACK);
   M5.Lcd.setTextSize(2);
@@ -358,16 +359,13 @@ void drawStatus() {
   M5.Lcd.setCursor(blockX + (blockW - 84) / 2, blockA_y + 26);
   M5.Lcd.print("OPT+TAB");
 
-  // === Button B: right half-circle, flush with left edge, vertically centered on block ===
+  // === Button B: right half-circle, flush with left edge ===
   int blockB_y = blockA_y + blockH + gap;
   int blockB_mid = blockB_y + blockH / 2;
-  // Center at x=0 so right half is visible
   M5.Lcd.fillCircle(0, blockB_mid, r, DARKGREY);
-
-  // Horizontal line from half-circle to block B
   M5.Lcd.drawLine(r, blockB_mid, blockX, blockB_mid, DARKGREY);
 
-  // Block B — all text size 2
+  // Block B
   M5.Lcd.fillRoundRect(blockX, blockB_y, blockW, blockH, 4, 0x4208);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
@@ -376,18 +374,21 @@ void drawStatus() {
   M5.Lcd.setCursor(blockX + (blockW - 48) / 2, blockB_y + 26);
   M5.Lcd.print("WAKE");
 
-  // === Power line: from top-right half-circle, down to block PWR ===
+  // === Power line: half-circle → diagonal → vertical → diagonal → block ===
   int blockP_y = blockB_y + blockH + gap;
-  int lineX = W - r - 6;  // vertical line x
 
-  // Diagonal from bottom of half-circle to vertical line
-  M5.Lcd.drawLine(W - r, dotA_y + r, lineX, dotA_y + r + 12, MAGENTA);
+  // Diagonal from half-circle bottom edge to vertical line
+  // Half-circle center is at (W-1, dotA_y), bottom-left visible point ≈ (W-1-r, dotA_y+r)
+  int diagStartX = W - 1 - r;
+  int diagStartY = dotA_y + r;
+  M5.Lcd.drawLine(diagStartX, diagStartY, lineX, diagStartY + (diagStartX - lineX), MAGENTA);
+  int vertStartY = diagStartY + (diagStartX - lineX);
   // Vertical down
-  M5.Lcd.drawLine(lineX, dotA_y + r + 12, lineX, blockP_y + 10, MAGENTA);
+  M5.Lcd.drawLine(lineX, vertStartY, lineX, blockP_y + 10, MAGENTA);
   // Diagonal into block
-  M5.Lcd.drawLine(lineX, blockP_y + 10, blockX + blockW, blockP_y + blockH / 2, MAGENTA);
+  M5.Lcd.drawLine(lineX, blockP_y + 10, blockRight, blockP_y + blockH / 2, MAGENTA);
 
-  // Block PWR — all text size 2
+  // Block PWR
   M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 4, MAGENTA);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
@@ -457,7 +458,7 @@ void updateBattery() {
 
   int barX = 14, barW = 80 - tw - barX - 6, barH = 6;
   M5.Lcd.drawRect(barX, batY + 3, barW, barH, DARKGREY);
-  M5.Lcd.fillRect(barX + 1, batY + 4, barW + 1, barH - 2, BLACK);
+  M5.Lcd.fillRect(barX + 1, batY + 4, barW - 2, barH - 2, BLACK);
   int fillW = (barW - 2) * pct / 100;
   if (fillW > 0) M5.Lcd.fillRect(barX + 1, batY + 4, fillW, barH - 2, batCol);
 }
@@ -482,7 +483,9 @@ void drawStatus() {
   int W = 80;
   int blockX = 10, blockW = 60;
   int blockH = 32, gap = 4;
-  int r = 7;
+  int r = 6;
+  int blockRight = blockX + blockW;
+  int lineX = blockRight + (W - blockRight) / 2;
 
   // Button A: full circle, top center
   int dotA_y = r + 2;
@@ -521,12 +524,14 @@ void drawStatus() {
   M5.Lcd.setCursor(blockX + (blockW - 24) / 2, blockB_y + 21);
   M5.Lcd.print("WAKE");
 
-  // Power line: from half-circle down to block PWR
+  // Power line: half-circle → diagonal → vertical → diagonal → block
   int blockP_y = blockB_y + blockH + gap;
-  int lineX = W - r - 4;
-  M5.Lcd.drawLine(W - r, dotA_y + r, lineX, dotA_y + r + 8, MAGENTA);
-  M5.Lcd.drawLine(lineX, dotA_y + r + 8, lineX, blockP_y + 8, MAGENTA);
-  M5.Lcd.drawLine(lineX, blockP_y + 8, blockX + blockW, blockP_y + blockH / 2, MAGENTA);
+  int diagStartX = W - 1 - r;
+  int diagStartY = dotA_y + r;
+  M5.Lcd.drawLine(diagStartX, diagStartY, lineX, diagStartY + (diagStartX - lineX), MAGENTA);
+  int vertStartY = diagStartY + (diagStartX - lineX);
+  M5.Lcd.drawLine(lineX, vertStartY, lineX, blockP_y + 8, MAGENTA);
+  M5.Lcd.drawLine(lineX, blockP_y + 8, blockRight, blockP_y + blockH / 2, MAGENTA);
 
   // Block PWR
   M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 3, MAGENTA);
