@@ -4,9 +4,11 @@ CACHE_DIR   := $(HOME)/Library/Caches/arduino/sketches
 
 FQBN_C      := m5stack:esp32:m5stack_stickc
 FQBN_CP     := m5stack:esp32:m5stack_stickc_plus
+FQBN_CARD   := m5stack:esp32:m5stack_cardputer
 
 PORT_C      ?= /dev/cu.usbserial-XXXXXXXX
 PORT_CP     ?= /dev/cu.usbserial-XXXXXXXX
+PORT_CARD   ?= /dev/cu.usbmodem1101
 
 BAUD        ?= 115200
 UPLOAD_BAUD ?= 1500000
@@ -32,30 +34,38 @@ sys.argv = ['esptool'] + '$(1)'.split(); \
 esptool._main()"
 endef
 
-.PHONY: help build-c build-cp upload-c upload-cp flash-c flash-cp monitor-c monitor-cp clean
+.PHONY: help build-c build-cp build-card upload-c upload-cp upload-card flash-c flash-cp flash-card monitor-c monitor-cp monitor-card clean
 
 help:
-	@echo "BLE Keyboard firmware — M5StickC / M5StickC Plus"
+	@echo "BLE Keyboard firmware — M5StickC / M5StickC Plus / CardPuter"
 	@echo ""
-	@echo "  make build-c                   编译 M5StickC"
-	@echo "  make build-cp                  编译 M5StickC Plus"
-	@echo "  make upload-c  [PORT_C=...]    上传 M5StickC（保留配对信息）"
-	@echo "  make upload-cp [PORT_CP=...]   上传 M5StickC Plus（保留配对信息）"
-	@echo "  make flash-c   [PORT_C=...]    编译 + 上传 M5StickC"
-	@echo "  make flash-cp  [PORT_CP=...]   编译 + 上传 M5StickC Plus"
-	@echo "  make monitor-c [PORT_C=...]    串口监视 M5StickC"
-	@echo "  make monitor-cp [PORT_CP=...]  串口监视 M5StickC Plus"
-	@echo "  make clean                     清理编译缓存"
+	@echo "  make build-c                      编译 M5StickC"
+	@echo "  make build-cp                     编译 M5StickC Plus"
+	@echo "  make build-card                   编译 CardPuter"
+	@echo "  make upload-c    [PORT_C=...]     上传 M5StickC"
+	@echo "  make upload-cp   [PORT_CP=...]    上传 M5StickC Plus"
+	@echo "  make upload-card [PORT_CARD=...]  上传 CardPuter"
+	@echo "  make flash-c     [PORT_C=...]     编译 + 上传 M5StickC"
+	@echo "  make flash-cp    [PORT_CP=...]    编译 + 上传 M5StickC Plus"
+	@echo "  make flash-card  [PORT_CARD=...]  编译 + 上传 CardPuter"
+	@echo "  make monitor-c   [PORT_C=...]     串口监视 M5StickC"
+	@echo "  make monitor-cp  [PORT_CP=...]    串口监视 M5StickC Plus"
+	@echo "  make monitor-card [PORT_CARD=...] 串口监视 CardPuter"
+	@echo "  make clean                        清理编译缓存"
 	@echo ""
 	@echo "默认串口:"
 	@echo "  M5StickC:      $(PORT_C)"
 	@echo "  M5StickC Plus: $(PORT_CP)"
+	@echo "  CardPuter:     $(PORT_CARD)"
 
 build-c: clean
 	$(ARDUINO_CLI) compile --fqbn $(FQBN_C) $(SKETCH)
 
 build-cp: clean
 	$(ARDUINO_CLI) compile --fqbn $(FQBN_CP) $(SKETCH)
+
+build-card: clean
+	$(ARDUINO_CLI) compile --fqbn $(FQBN_CARD) $(SKETCH)
 
 # Upload using arduino-cli first; if it hits the pyserial UTF-8 bug,
 # fall back to esptool with monkey-patched pyserial.
@@ -82,9 +92,17 @@ upload-cp:
 	       0xe000  $(HOME)/.arduino15/packages/m5stack/hardware/esp32/*/tools/partitions/boot_app0.bin \
 	       0x10000 $$SKETCH_DIR/$(SKETCH).bin); }
 
+upload-card:
+	$(ARDUINO_CLI) upload --fqbn $(FQBN_CARD) -p $(PORT_CARD) $(SKETCH)
+
 flash-c: build-c upload-c
 
 flash-cp: build-cp upload-cp
+
+flash-card: build-card upload-card
+
+monitor-card:
+	$(ARDUINO_CLI) monitor -p $(PORT_CARD) -c baudrate=$(BAUD)
 
 monitor-c:
 	stty -f "$(PORT_C)" $(BAUD) && cat "$(PORT_C)"

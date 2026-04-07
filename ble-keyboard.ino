@@ -1,5 +1,49 @@
 // Device auto-detection via board macro (set by Arduino FQBN)
-#if defined(ARDUINO_M5STACK_STICKC_PLUS)
+#if defined(ARDUINO_M5STACK_CARDPUTER)
+  #include <M5Cardputer.h>
+  // M5Cardputer's Keyboard_def.h macros conflict with BleKeyboard.h consts
+  #undef KEY_LEFT_CTRL
+  #undef KEY_LEFT_SHIFT
+  #undef KEY_LEFT_ALT
+  #undef KEY_LEFT_GUI
+  #undef KEY_RIGHT_CTRL
+  #undef KEY_RIGHT_SHIFT
+  #undef KEY_RIGHT_ALT
+  #undef KEY_RIGHT_GUI
+  #undef KEY_BACKSPACE
+  #undef KEY_TAB
+  #undef KEY_RETURN
+  #undef KEY_ESC
+  #undef KEY_INSERT
+  #undef KEY_DELETE
+  #undef KEY_PAGE_UP
+  #undef KEY_PAGE_DOWN
+  #undef KEY_HOME
+  #undef KEY_END
+  #undef KEY_CAPS_LOCK
+  #undef KEY_F1
+  #undef KEY_F2
+  #undef KEY_F3
+  #undef KEY_F4
+  #undef KEY_F5
+  #undef KEY_F6
+  #undef KEY_F7
+  #undef KEY_F8
+  #undef KEY_F9
+  #undef KEY_F10
+  #undef KEY_F11
+  #undef KEY_F12
+  #undef KEY_UP_ARROW
+  #undef KEY_DOWN_ARROW
+  #undef KEY_LEFT_ARROW
+  #undef KEY_RIGHT_ARROW
+  #undef KEY_NUM_ENTER
+  #undef KEY_PRTSC
+  #define DEVICE_NAME   "Cardputer-KB"
+  #define SCREEN_W      240
+  #define SCREEN_H      135
+  #define IS_CARDPUTER  1
+#elif defined(ARDUINO_M5STACK_STICKC_PLUS)
   #include <M5StickCPlus.h>
   #define DEVICE_NAME   "M5StickCP-KB"
   #define SCREEN_W      135
@@ -44,6 +88,11 @@ const unsigned long LED_BREATH_DURATION = 1000;
 const int LED_BREATH_PEAK = 240;
 const int LED_PIN = 10;
 
+#if IS_CARDPUTER
+bool fnPrevHeld = false;
+bool fnComboUsed = false;
+#endif
+
 void buzzerTone(int freq, int ms) {
   tone(BUZZER_PIN, freq);
   delay(ms);
@@ -65,8 +114,12 @@ void beepPowerOff() {
 }
 
 int getBatPercent() {
+#if IS_CARDPUTER
+  int pct = M5Cardputer.Power.getBatteryLevel();
+#else
   float v = M5.Axp.GetBatVoltage();
   int pct = (int)((v - 3.0f) / (4.2f - 3.0f) * 100.0f);
+#endif
   if (pct > 100) pct = 100;
   if (pct < 0) pct = 0;
   return pct;
@@ -74,21 +127,33 @@ int getBatPercent() {
 
 void screenWake() {
   if (!screenOn) {
+#if IS_CARDPUTER
+    M5Cardputer.Display.wakeup();
+    M5Cardputer.Display.setBrightness(80);
+#else
     M5.Axp.SetLDO2(true);
     M5.Axp.ScreenBreath(80);
+#endif
     screenOn = true;
     drawStatus();
   }
   lastActivity = millis();
+#if !IS_CARDPUTER
   lastPowerCheck = millis();
   lastPowerCheckBat = getBatPercent();
+#endif
 }
 
 void screenSleep() {
   if (screenOn) {
+#if IS_CARDPUTER
+    M5Cardputer.Display.setBrightness(0);
+    M5Cardputer.Display.sleep();
+#else
     M5.Axp.SetLDO2(false);
-    screenOn = false;
     lastLedBlink = millis();
+#endif
+    screenOn = false;
   }
 }
 
@@ -96,7 +161,111 @@ void screenSleep() {
 //  Display functions — completely separate per device
 // ============================================================
 
-#if defined(ARDUINO_M5STACK_STICKC_PLUS)
+#if IS_CARDPUTER
+// ----- M5Cardputer: landscape 240x135 -----
+
+#define COL_KEY_NUM  0x07FF  // cyan
+#define COL_KEY_FN   0xF81F  // magenta
+#define COL_KEY_ENT  0xFFE0  // yellow
+#define COL_KEY_ESC  0xFD20  // orange
+
+void drawKeyBlock(int x, int y, int w, int h, uint16_t bg, const char* label, const char* action) {
+  M5Cardputer.Display.fillRoundRect(x, y, w, h, 3, bg);
+  M5Cardputer.Display.setTextColor(BLACK);
+  // Label: bold size 2
+  M5Cardputer.Display.setTextSize(2);
+  int labelW = strlen(label) * 12;
+  M5Cardputer.Display.setCursor(x + (w - labelW) / 2, y + 2);
+  M5Cardputer.Display.print(label);
+  // Action: size 1
+  M5Cardputer.Display.setTextSize(1);
+  int actionW = strlen(action) * 6;
+  M5Cardputer.Display.setCursor(x + (w - actionW) / 2, y + h - 10);
+  M5Cardputer.Display.print(action);
+}
+
+void updateBattery() {
+  int pct = getBatPercent();
+  bleKeyboard.setBatteryLevel(pct);
+  if (!screenOn) return;
+
+  int batY = SCREEN_H - 14;
+  M5Cardputer.Display.fillRect(0, batY, SCREEN_W, 14, BLACK);
+  M5Cardputer.Display.setTextSize(1);
+  if (pct > 50)      M5Cardputer.Display.setTextColor(GREEN);
+  else if (pct > 20) M5Cardputer.Display.setTextColor(YELLOW);
+  else               M5Cardputer.Display.setTextColor(RED);
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "BAT %d%%", pct);
+  int tw = strlen(buf) * 6;
+  M5Cardputer.Display.setCursor(SCREEN_W - tw - 4, batY + 3);
+  M5Cardputer.Display.print(buf);
+}
+
+void drawStatus() {
+  if (!screenOn) return;
+  M5Cardputer.Display.fillScreen(BLACK);
+
+  M5Cardputer.Display.setTextSize(2);
+  if (!connected) {
+    M5Cardputer.Display.setTextColor(YELLOW);
+    M5Cardputer.Display.setCursor(4, 4);
+    M5Cardputer.Display.print("BLE Keyboard");
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setTextColor(DARKGREY);
+    M5Cardputer.Display.setCursor(4, 26);
+    M5Cardputer.Display.print("Waiting for connection...");
+    updateBattery();
+    return;
+  }
+
+  M5Cardputer.Display.setTextColor(GREEN);
+  M5Cardputer.Display.setCursor(4, 4);
+  M5Cardputer.Display.print("Connected");
+
+  // Row 1: 1-4   Row 2: 5-8   Row 3: Fn, Tab, Enter, Esc
+  int y1 = 24, bh = 32, gap = 3, numW = 56;
+  const char* nums[] = {"1","2","3","4","5","6","7","8"};
+  for (int i = 0; i < 4; i++) {
+    char action[8];
+    snprintf(action, sizeof(action), "Cmd+%s", nums[i]);
+    drawKeyBlock(4 + i * (numW + gap), y1, numW, bh, COL_KEY_NUM, nums[i], action);
+  }
+  int y2 = y1 + bh + gap;
+  for (int i = 4; i < 8; i++) {
+    char action[8];
+    snprintf(action, sizeof(action), "Cmd+%s", nums[i]);
+    drawKeyBlock(4 + (i - 4) * (numW + gap), y2, numW, bh, COL_KEY_NUM, nums[i], action);
+  }
+  int y3 = y2 + bh + gap;
+  int w3 = 56;
+  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "Fn", "Opt+Tab");
+  drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Tab", "Enter");
+  drawKeyBlock(4 + (w3 + gap) * 2, y3, w3, bh, COL_KEY_ENT, "Enter", "Enter");
+  drawKeyBlock(4 + (w3 + gap) * 3, y3, w3, bh, COL_KEY_ESC, "`", "Esc");
+
+  updateBattery();
+}
+
+void showFlash(const char* text, uint16_t color) {
+  if (!screenOn) {
+    M5Cardputer.Display.wakeup();
+    M5Cardputer.Display.setBrightness(80);
+    screenOn = true;
+  }
+  M5Cardputer.Display.fillScreen(color);
+  M5Cardputer.Display.setTextSize(3);
+  M5Cardputer.Display.setTextColor(BLACK);
+  int tw = strlen(text) * 18;
+  M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - 24) / 2);
+  M5Cardputer.Display.print(text);
+  delay(200);
+  drawStatus();
+  lastActivity = millis();
+}
+
+#elif defined(ARDUINO_M5STACK_STICKC_PLUS)
 // ----- M5StickC Plus: portrait 135x240, USB end UP -----
 
 void updateBattery() {
@@ -331,20 +500,28 @@ void flashBtnA() {
 // ============================================================
 
 void setup() {
+#if IS_CARDPUTER
+  auto cfg = M5.config();
+  M5Cardputer.begin(cfg);
+  M5Cardputer.Display.setRotation(1);
+  M5Cardputer.Display.setBrightness(80);
+  M5Cardputer.Display.fillScreen(BLACK);
+#else
   M5.begin();
-  setCpuFrequencyMhz(80);
   M5.Axp.ScreenBreath(80);
   M5.Lcd.setRotation(LCD_ROTATION);
   M5.Lcd.fillScreen(BLACK);
-
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, HIGH);
+#endif
 
-
+  setCpuFrequencyMhz(80);
   bleKeyboard.begin();
   drawStatus();
   lastActivity = millis();
   lastBatUpdate = millis();
+
+#if !IS_CARDPUTER
   lastPowerCheck = millis();
   lastPowerCheckBat = getBatPercent();
 
@@ -353,10 +530,15 @@ void setup() {
     delay(800);
     beepPowerOff();
   }
+#endif
 }
 
 void loop() {
+#if IS_CARDPUTER
+  M5Cardputer.update();
+#else
   M5.update();
+#endif
 
   connected = bleKeyboard.isConnected();
   if (connected != prevConnected) {
@@ -371,6 +553,7 @@ void loop() {
     screenSleep();
   }
 
+#if !IS_CARDPUTER
   // Auto power off after 30 min idle (skip if charging)
   if (millis() - lastActivity >= POWEROFF_TIMEOUT
       && millis() - lastPowerCheck >= POWEROFF_TIMEOUT) {
@@ -412,6 +595,7 @@ void loop() {
     analogWrite(LED_PIN, 255);
     ledBreathing = false;
   }
+#endif
 
   // Battery refresh: 30s when screen on, 5min when idle
   unsigned long batInterval = screenOn ? BAT_INTERVAL_ACTIVE : BAT_INTERVAL_IDLE;
@@ -419,6 +603,7 @@ void loop() {
     lastBatUpdate = millis();
     updateBattery();
 
+#if !IS_CARDPUTER
     int pct = getBatPercent();
     if (pct <= 20 && pct > 10 && !warnedAt20) {
       warnedAt20 = true;
@@ -429,17 +614,68 @@ void loop() {
     }
     if (pct > 20) { warnedAt20 = false; warnedAt10 = false; }
     else if (pct > 10) { warnedAt10 = false; }
+#endif
   }
 
-  // Button B: wake screen only
+#if IS_CARDPUTER
+  // CardPuter keyboard input
+  if (!connected) { delay(100); return; }
+
+  if (M5Cardputer.Keyboard.isChange()) {
+    auto& keys = M5Cardputer.Keyboard.keysState();
+    bool fnNow = keys.fn;
+
+    if (fnNow && !fnPrevHeld) fnComboUsed = false;
+    if (fnNow && (keys.word.size() > 0 || keys.enter || keys.del)) fnComboUsed = true;
+
+    // Fn released alone → Opt+Tab (voice input)
+    bool fnJustReleased = fnPrevHeld && !fnNow && !fnComboUsed;
+    fnPrevHeld = fnNow;
+
+    if (fnJustReleased) {
+      bleKeyboard.press(KEY_LEFT_ALT);
+      bleKeyboard.press(KEY_TAB);
+      bleKeyboard.releaseAll();
+      showFlash("Opt+Tab", COL_KEY_FN);
+      return;
+    }
+
+    if (!fnNow && M5Cardputer.Keyboard.isPressed()) {
+      for (auto c : keys.word) {
+        screenWake();
+        switch (c) {
+          case '1': case '2': case '3': case '4': case '5':
+          case '6': case '7': case '8':
+            bleKeyboard.press(KEY_LEFT_GUI);
+            bleKeyboard.press(c);
+            bleKeyboard.releaseAll();
+            break;
+          case '`':
+            bleKeyboard.write(KEY_ESC);
+            showFlash("Esc", COL_KEY_ESC);
+            break;
+          default:
+            break;
+        }
+      }
+      if (keys.tab) {
+        bleKeyboard.write(KEY_RETURN);
+        screenWake();
+      }
+      if (keys.enter) {
+        bleKeyboard.write(KEY_RETURN);
+        screenWake();
+      }
+    }
+  }
+
+#else
+  // M5StickC / M5StickC Plus button input
   if (M5.BtnB.wasPressed()) {
     screenWake();
   }
 
-  if (!connected) {
-    delay(100);
-    return;
-  }
+  if (!connected) { delay(100); return; }
 
   // Button A: Opt+Tab
   if (M5.BtnA.wasPressed()) {
@@ -454,6 +690,7 @@ void loop() {
     bleKeyboard.write(KEY_RETURN);
     flashPower();
   }
+#endif
 
   delay(10);
 }
