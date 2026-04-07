@@ -238,21 +238,21 @@ void drawStatus() {
   const char* nums[] = {"1","2","3","4","5","6","7","8"};
   for (int i = 0; i < 4; i++) {
     char action[8];
-    snprintf(action, sizeof(action), "Cmd+%s", nums[i]);
+    snprintf(action, sizeof(action), "CMD+%s", nums[i]);
     drawKeyBlock(4 + i * (numW + gap), y1, numW, bh, COL_KEY_NUM, nums[i], action);
   }
   int y2 = y1 + bh + gap;
   for (int i = 4; i < 8; i++) {
     char action[8];
-    snprintf(action, sizeof(action), "Cmd+%s", nums[i]);
+    snprintf(action, sizeof(action), "CMD+%s", nums[i]);
     drawKeyBlock(4 + (i - 4) * (numW + gap), y2, numW, bh, COL_KEY_NUM, nums[i], action);
   }
   int y3 = y2 + bh + gap;
   int w3 = 57;
-  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "Ctrl", "Opt+Tab");
-  drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Fn", "Enter");
-  drawKeyBlock(4 + (w3 + gap) * 2, y3, w3, bh, COL_KEY_ENT, "Enter", "Enter");
-  drawKeyBlock(4 + (w3 + gap) * 3, y3, w3, bh, COL_KEY_ESC, "`", "Esc");
+  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "Ctrl", "OPT+TAB");
+  drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Fn", "ENTER");
+  drawKeyBlock(4 + (w3 + gap) * 2, y3, w3, bh, COL_KEY_ENT, "Enter", "ENTER");
+  drawKeyBlock(4 + (w3 + gap) * 3, y3, w3, bh, COL_KEY_ESC, "`", "ESC");
 
   updateBattery();
 }
