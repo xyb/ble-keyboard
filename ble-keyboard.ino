@@ -466,16 +466,31 @@ void updateBattery() {
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
-  // Device name
-  int nameY = 138;
-  M5.Lcd.fillRect(0, nameY, 80, 10, BLACK);
+  // Device name — may need 2 lines on 80px wide screen
+  int nameY = 124;
+  int nameLen = strlen(fullDeviceName);
+  int charW = 6;  // font size 1
+  int maxChars = (80 - 4) / charW;  // 12 chars per line, 2px margin each side
+  int nameLines = (nameLen <= maxChars) ? 1 : 2;
+  M5.Lcd.fillRect(0, nameY, 80, nameLines * 8, BLACK);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(DARKGREY);
-  int nameW = strlen(fullDeviceName) * 6;
-  M5.Lcd.setCursor((80 - nameW) / 2, nameY + 1);
-  M5.Lcd.print(fullDeviceName);
+  if (nameLines == 1) {
+    M5.Lcd.setCursor((80 - nameLen * charW) / 2, nameY);
+    M5.Lcd.print(fullDeviceName);
+  } else {
+    // Line 1: first maxChars characters
+    int line1W = maxChars * charW;
+    M5.Lcd.setCursor((80 - line1W) / 2, nameY);
+    for (int i = 0; i < maxChars; i++) M5.Lcd.write(fullDeviceName[i]);
+    // Line 2: remaining characters, centered
+    int remain = nameLen - maxChars;
+    int line2W = remain * charW;
+    M5.Lcd.setCursor((80 - line2W) / 2, nameY + 8);
+    M5.Lcd.print(fullDeviceName + maxChars);
+  }
 
-  int batY = 150;
+  int batY = nameY + nameLines * 8 + 2;
   M5.Lcd.fillRect(0, batY, 80, 12, BLACK);
 
   uint16_t bleCol = connected ? GREEN : RED;
