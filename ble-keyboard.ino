@@ -377,16 +377,18 @@ void drawStatus() {
   // === Power line: half-circle → diagonal → vertical → diagonal → block ===
   int blockP_y = blockB_y + blockH + gap;
 
-  // Diagonal from half-circle bottom edge to vertical line
-  // Half-circle center is at (W-1, dotA_y), bottom-left visible point ≈ (W-1-r, dotA_y+r)
-  int diagStartX = W - 1 - r;
-  int diagStartY = dotA_y + r;
-  M5.Lcd.drawLine(diagStartX, diagStartY, lineX, diagStartY + (diagStartX - lineX), MAGENTA);
+  // Start from bottom-left edge of half-circle (on the circle perimeter)
+  // Circle center (W-1, dotA_y), r. Pick point at ~240° on circle.
+  int diagStartX = W - 1 - r / 2;        // midpoint of visible half-circle
+  int diagStartY = dotA_y + r - 1;        // near bottom edge of circle
+  // Diagonal down to vertical line x
   int vertStartY = diagStartY + (diagStartX - lineX);
+  M5.Lcd.drawLine(diagStartX, diagStartY, lineX, vertStartY, MAGENTA);
   // Vertical down
-  M5.Lcd.drawLine(lineX, vertStartY, lineX, blockP_y + 10, MAGENTA);
-  // Diagonal into block
-  M5.Lcd.drawLine(lineX, blockP_y + 10, blockRight, blockP_y + blockH / 2, MAGENTA);
+  int vertEndY = blockP_y + blockH / 4;
+  M5.Lcd.drawLine(lineX, vertStartY, lineX, vertEndY, MAGENTA);
+  // Diagonal into block right edge
+  M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + blockH / 2, MAGENTA);
 
   // Block PWR
   M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 4, MAGENTA);
@@ -526,12 +528,13 @@ void drawStatus() {
 
   // Power line: half-circle → diagonal → vertical → diagonal → block
   int blockP_y = blockB_y + blockH + gap;
-  int diagStartX = W - 1 - r;
-  int diagStartY = dotA_y + r;
-  M5.Lcd.drawLine(diagStartX, diagStartY, lineX, diagStartY + (diagStartX - lineX), MAGENTA);
+  int diagStartX = W - 1 - r / 2;
+  int diagStartY = dotA_y + r - 1;
   int vertStartY = diagStartY + (diagStartX - lineX);
-  M5.Lcd.drawLine(lineX, vertStartY, lineX, blockP_y + 8, MAGENTA);
-  M5.Lcd.drawLine(lineX, blockP_y + 8, blockRight, blockP_y + blockH / 2, MAGENTA);
+  M5.Lcd.drawLine(diagStartX, diagStartY, lineX, vertStartY, MAGENTA);
+  int vertEndY = blockP_y + blockH / 4;
+  M5.Lcd.drawLine(lineX, vertStartY, lineX, vertEndY, MAGENTA);
+  M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + blockH / 2, MAGENTA);
 
   // Block PWR
   M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 3, MAGENTA);
