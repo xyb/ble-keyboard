@@ -248,10 +248,11 @@ void drawStatus() {
     drawKeyBlock(4 + (i - 4) * (numW + gap), y2, numW, bh, COL_KEY_NUM, nums[i], action);
   }
   int y3 = y2 + bh + gap;
-  int w3 = 76;
-  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "`", "Opt+Tab");
+  int w3 = 57;
+  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "Ctrl", "Opt+Tab");
   drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Fn", "Enter");
   drawKeyBlock(4 + (w3 + gap) * 2, y3, w3, bh, COL_KEY_ENT, "Enter", "Enter");
+  drawKeyBlock(4 + (w3 + gap) * 3, y3, w3, bh, COL_KEY_ESC, "`", "Esc");
 
   updateBattery();
 }
@@ -631,31 +632,42 @@ void loop() {
 
   if (M5Cardputer.Keyboard.isChange()) {
     auto& keys = M5Cardputer.Keyboard.keysState();
-    bool fnNow = keys.fn;
 
-    // Fn → Enter
+    // Fn → Enter (on press)
+    bool fnNow = keys.fn;
     if (fnNow && !fnPrevHeld) {
       bleKeyboard.write(KEY_RETURN);
-      screenWake();
+      showFlash("Enter", COL_KEY_ENT);
     }
     fnPrevHeld = fnNow;
 
-    if (!fnNow && M5Cardputer.Keyboard.isPressed()) {
+    // Ctrl → Opt+Tab (voice input, on press)
+    static bool ctrlPrev = false;
+    if (keys.ctrl && !ctrlPrev) {
+      bleKeyboard.press(KEY_LEFT_ALT);
+      bleKeyboard.press(KEY_TAB);
+      bleKeyboard.releaseAll();
+      showFlash("Opt+Tab", COL_KEY_FN);
+    }
+    ctrlPrev = keys.ctrl;
+
+    if (M5Cardputer.Keyboard.isPressed()) {
       for (auto c : keys.word) {
         screenWake();
         switch (c) {
           case '1': case '2': case '3': case '4': case '5':
-          case '6': case '7': case '8':
+          case '6': case '7': case '8': {
             bleKeyboard.press(KEY_LEFT_GUI);
             bleKeyboard.press(c);
             bleKeyboard.releaseAll();
+            char msg[8];
+            snprintf(msg, sizeof(msg), "Cmd+%c", c);
+            showFlash(msg, COL_KEY_NUM);
             break;
+          }
           case '`':
-            // Backtick → Opt+Tab (voice input)
-            bleKeyboard.press(KEY_LEFT_ALT);
-            bleKeyboard.press(KEY_TAB);
-            bleKeyboard.releaseAll();
-            showFlash("Opt+Tab", COL_KEY_FN);
+            bleKeyboard.write(KEY_ESC);
+            showFlash("Esc", COL_KEY_ESC);
             break;
           default:
             break;
