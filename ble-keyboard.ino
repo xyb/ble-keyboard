@@ -58,8 +58,10 @@
 #endif
 
 #include <BleKeyboard.h>
+#include <esp_mac.h>
 
 BleKeyboard bleKeyboard(DEVICE_NAME, "M5Stack", 100);
+char fullDeviceName[32];  // "DeviceName-XXYY" with BLE MAC suffix
 
 bool connected = false;
 bool prevConnected = false;
@@ -215,22 +217,24 @@ void drawStatus() {
   if (!screenOn) return;
   M5Cardputer.Display.fillScreen(BLACK);
 
-  M5Cardputer.Display.setTextSize(2);
+  // Top bar: device name (left) + BLE dot (right)
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(DARKGREY);
+  M5Cardputer.Display.setCursor(4, 4);
+  M5Cardputer.Display.print(fullDeviceName);
+
+  uint16_t bleCol = connected ? GREEN : RED;
+  int dotX = SCREEN_W - 8;
+  M5Cardputer.Display.fillCircle(dotX, 8, 4, bleCol);
+
   if (!connected) {
+    M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(YELLOW);
-    M5Cardputer.Display.setCursor(4, 4);
-    M5Cardputer.Display.print("BLE Keyboard");
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(DARKGREY);
-    M5Cardputer.Display.setCursor(4, 26);
-    M5Cardputer.Display.print("Waiting for connection...");
+    M5Cardputer.Display.setCursor(4, 50);
+    M5Cardputer.Display.print("Waiting...");
     updateBattery();
     return;
   }
-
-  M5Cardputer.Display.setTextColor(GREEN);
-  M5Cardputer.Display.setCursor(4, 4);
-  M5Cardputer.Display.print("Connected");
 
   // Row 1: 1-4   Row 2: 5-8   Row 3: Fn, Tab, Enter, Esc
   // Full height available: 135 - 22(title) = 113, 3 rows + 2 gaps
@@ -285,6 +289,15 @@ void updateBattery() {
   int pct = getBatPercent();
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
+
+  // Device name
+  int nameY = 210;
+  M5.Lcd.fillRect(0, nameY, 135, 10, BLACK);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(DARKGREY);
+  int nameW = strlen(fullDeviceName) * 6;
+  M5.Lcd.setCursor((135 - nameW) / 2, nameY + 1);
+  M5.Lcd.print(fullDeviceName);
 
   int batY = 222;
   M5.Lcd.fillRect(0, batY, 135, 18, BLACK);
@@ -443,7 +456,16 @@ void updateBattery() {
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
-  int batY = 148;
+  // Device name
+  int nameY = 138;
+  M5.Lcd.fillRect(0, nameY, 80, 10, BLACK);
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setTextColor(DARKGREY);
+  int nameW = strlen(fullDeviceName) * 6;
+  M5.Lcd.setCursor((80 - nameW) / 2, nameY + 1);
+  M5.Lcd.print(fullDeviceName);
+
+  int batY = 150;
   M5.Lcd.fillRect(0, batY, 80, 12, BLACK);
 
   uint16_t bleCol = connected ? GREEN : RED;
@@ -604,6 +626,13 @@ void setup() {
 #endif
 
   setCpuFrequencyMhz(80);
+
+  // Build device name with BLE MAC suffix: "DeviceName-XXYY"
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_BT);
+  snprintf(fullDeviceName, sizeof(fullDeviceName), "%s-%02X%02X",
+           DEVICE_NAME, mac[4], mac[5]);
+  bleKeyboard.setName(fullDeviceName);
   bleKeyboard.begin();
   drawStatus();
   lastActivity = millis();
