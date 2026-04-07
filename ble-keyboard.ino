@@ -200,16 +200,23 @@ void updateBattery() {
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
-  // Top-right corner, same line as "Connected"
+  // Top-right: BLE dot + battery percentage
   char buf[16];
   snprintf(buf, sizeof(buf), "%d%%", pct);
   int tw = strlen(buf) * 6;
-  M5Cardputer.Display.fillRect(SCREEN_W - tw - 6, 4, tw + 6, 10, BLACK);
+  int dotR = 4;
+  int dotX = SCREEN_W - tw - dotR - 10;
+  // Clear area for dot + percentage
+  M5Cardputer.Display.fillRect(dotX - dotR - 2, 2, SCREEN_W - dotX + dotR + 2, 12, BLACK);
+  // BLE status dot
+  uint16_t bleCol = connected ? GREEN : RED;
+  M5Cardputer.Display.fillCircle(dotX, 8, dotR, bleCol);
+  // Battery percentage
   M5Cardputer.Display.setTextSize(1);
   if (pct > 50)      M5Cardputer.Display.setTextColor(GREEN);
   else if (pct > 20) M5Cardputer.Display.setTextColor(YELLOW);
   else               M5Cardputer.Display.setTextColor(RED);
-  M5Cardputer.Display.setCursor(SCREEN_W - tw - 4, 4);
+  M5Cardputer.Display.setCursor(dotX + dotR + 4, 4);
   M5Cardputer.Display.print(buf);
 }
 
@@ -218,14 +225,12 @@ void drawStatus() {
   M5Cardputer.Display.fillScreen(BLACK);
 
   // Top bar: device name (left) + BLE dot (right)
+  // Top bar: device name (left) + BLE dot + battery (right via updateBattery)
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(DARKGREY);
   M5Cardputer.Display.setCursor(4, 4);
   M5Cardputer.Display.print(fullDeviceName);
-
-  uint16_t bleCol = connected ? GREEN : RED;
-  int dotX = SCREEN_W - 8;
-  M5Cardputer.Display.fillCircle(dotX, 8, 4, bleCol);
+  updateBattery();
 
   if (!connected) {
     M5Cardputer.Display.setTextSize(2);
@@ -739,6 +744,9 @@ void loop() {
   if (!connected) { delay(100); return; }
 
   if (M5Cardputer.Keyboard.isChange()) {
+    // Any key activity wakes the screen
+    if (M5Cardputer.Keyboard.isPressed()) screenWake();
+
     auto& keys = M5Cardputer.Keyboard.keysState();
 
     // Fn → Enter (on press)
