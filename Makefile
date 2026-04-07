@@ -2,6 +2,11 @@ ARDUINO_CLI := arduino-cli
 SKETCH      := ble-keyboard.ino
 CACHE_DIR   := $(HOME)/Library/Caches/arduino/sketches
 
+# Per-device build directories to avoid cache conflicts
+BUILD_DIR_C    := build/stickc
+BUILD_DIR_CP   := build/stickc-plus
+BUILD_DIR_CARD := build/cardputer
+
 FQBN_C      := m5stack:esp32:m5stack_stickc
 FQBN_CP     := m5stack:esp32:m5stack_stickc_plus
 FQBN_CARD   := m5stack:esp32:m5stack_cardputer
@@ -58,42 +63,40 @@ help:
 	@echo "  M5StickC Plus: $(PORT_CP)"
 	@echo "  CardPuter:     $(PORT_CARD)"
 
-build-c: clean
-	$(ARDUINO_CLI) compile --fqbn $(FQBN_C) $(SKETCH)
+build-c:
+	$(ARDUINO_CLI) compile --fqbn $(FQBN_C) --build-path $(BUILD_DIR_C) $(SKETCH)
 
-build-cp: clean
-	$(ARDUINO_CLI) compile --fqbn $(FQBN_CP) $(SKETCH)
+build-cp:
+	$(ARDUINO_CLI) compile --fqbn $(FQBN_CP) --build-path $(BUILD_DIR_CP) $(SKETCH)
 
-build-card: clean
-	$(ARDUINO_CLI) compile --fqbn $(FQBN_CARD) $(SKETCH)
+build-card:
+	$(ARDUINO_CLI) compile --fqbn $(FQBN_CARD) --build-path $(BUILD_DIR_CARD) $(SKETCH)
 
 # Upload using arduino-cli first; if it hits the pyserial UTF-8 bug,
 # fall back to esptool with monkey-patched pyserial.
 # Uses per-partition writes (not merged.bin) to preserve NVS/bonding data.
 upload-c:
-	@$(ARDUINO_CLI) upload --fqbn $(FQBN_C) -p $(PORT_C) $(SKETCH) 2>&1 \
+	@$(ARDUINO_CLI) upload --fqbn $(FQBN_C) -p $(PORT_C) --input-dir $(BUILD_DIR_C) 2>&1 \
 	|| { echo "arduino-cli upload failed, falling back to patched esptool..."; \
-	     SKETCH_DIR=$$(find $(CACHE_DIR) -name "$(SKETCH).bin" -print -quit | xargs dirname); \
 	     $(call ESPTOOL_CMD,--chip esp32 --port $(PORT_C) --baud $(UPLOAD_BAUD) \
 	       write-flash \
-	       0x1000  $$SKETCH_DIR/$(SKETCH).bootloader.bin \
-	       0x8000  $$SKETCH_DIR/$(SKETCH).partitions.bin \
+	       0x1000  $(BUILD_DIR_C)/$(SKETCH).bootloader.bin \
+	       0x8000  $(BUILD_DIR_C)/$(SKETCH).partitions.bin \
 	       0xe000  $(HOME)/.arduino15/packages/m5stack/hardware/esp32/*/tools/partitions/boot_app0.bin \
-	       0x10000 $$SKETCH_DIR/$(SKETCH).bin); }
+	       0x10000 $(BUILD_DIR_C)/$(SKETCH).bin); }
 
 upload-cp:
-	@$(ARDUINO_CLI) upload --fqbn $(FQBN_CP) -p $(PORT_CP) $(SKETCH) 2>&1 \
+	@$(ARDUINO_CLI) upload --fqbn $(FQBN_CP) -p $(PORT_CP) --input-dir $(BUILD_DIR_CP) 2>&1 \
 	|| { echo "arduino-cli upload failed, falling back to patched esptool..."; \
-	     SKETCH_DIR=$$(find $(CACHE_DIR) -name "$(SKETCH).bin" -print -quit | xargs dirname); \
 	     $(call ESPTOOL_CMD,--chip esp32 --port $(PORT_CP) --baud $(UPLOAD_BAUD) \
 	       write-flash \
-	       0x1000  $$SKETCH_DIR/$(SKETCH).bootloader.bin \
-	       0x8000  $$SKETCH_DIR/$(SKETCH).partitions.bin \
+	       0x1000  $(BUILD_DIR_CP)/$(SKETCH).bootloader.bin \
+	       0x8000  $(BUILD_DIR_CP)/$(SKETCH).partitions.bin \
 	       0xe000  $(HOME)/.arduino15/packages/m5stack/hardware/esp32/*/tools/partitions/boot_app0.bin \
-	       0x10000 $$SKETCH_DIR/$(SKETCH).bin); }
+	       0x10000 $(BUILD_DIR_CP)/$(SKETCH).bin); }
 
 upload-card:
-	$(ARDUINO_CLI) upload --fqbn $(FQBN_CARD) -p $(PORT_CARD) $(SKETCH)
+	$(ARDUINO_CLI) upload --fqbn $(FQBN_CARD) -p $(PORT_CARD) --input-dir $(BUILD_DIR_CARD)
 
 flash-c: build-c upload-c
 
@@ -111,5 +114,5 @@ monitor-cp:
 	stty -f "$(PORT_CP)" $(BAUD) && cat "$(PORT_CP)"
 
 clean:
-	@rm -rf $(CACHE_DIR)/*
+	@rm -rf $(BUILD_DIR_C) $(BUILD_DIR_CP) $(BUILD_DIR_CARD)
 	@echo "编译缓存已清理"

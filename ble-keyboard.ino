@@ -89,6 +89,7 @@ const unsigned long LED_BLINK_INTERVAL = 10000;
 const unsigned long LED_BREATH_DURATION = 1000;
 const int LED_BREATH_PEAK = 240;
 const int LED_PIN = 10;
+const int SCREEN_BRIGHTNESS = 80;
 
 #if IS_CARDPUTER
 bool fnPrevHeld = false;
@@ -130,10 +131,10 @@ void screenWake() {
   if (!screenOn) {
 #if IS_CARDPUTER
     M5Cardputer.Display.wakeup();
-    M5Cardputer.Display.setBrightness(80);
+    M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
 #else
     M5.Axp.SetLDO2(true);
-    M5.Axp.ScreenBreath(80);
+    M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
 #endif
     screenOn = true;
     drawStatus();
@@ -165,32 +166,76 @@ void screenSleep() {
 #if IS_CARDPUTER
 // ----- M5Cardputer: landscape 240x135 -----
 
+// Font metrics
+const int FONT1_W = 6;
+const int FONT1_H = 8;
+const int FONT2_W = 12;
+const int FONT2_H = 16;
+const int FONT15_W = 9;   // font size 1.5
+const int FONT3_W = 18;
+const int FONT3_H = 24;
+
+// Key block colors
 #define COL_KEY_NUM  0x07FF  // cyan
 #define COL_KEY_FN   0xF81F  // magenta
 #define COL_KEY_ENT  0xFFE0  // yellow
 #define COL_KEY_ESC  0xFD20  // orange
 
+// Key block layout
+const int KEY_CORNER_R    = 3;
+const int KEY_LABEL_PAD   = 4;   // horizontal padding for label fit check
+const int KEY_LABEL_Y1    = 2;   // label y offset when size 2
+const int KEY_LABEL_Y1_SM = 6;   // label y offset when shrunk to size 1
+const int KEY_ACTION_PAD  = 2;   // horizontal padding for action fit check
+const int KEY_ACTION_BOT1 = 14;  // action bottom offset when size 1.5
+const int KEY_ACTION_BOT2 = 10;  // action bottom offset when size 1
+
+// Status bar
+const int STATUS_MARGIN   = 4;
+const int STATUS_TEXT_Y   = 4;
+
+// BLE indicator
+const int BLE_DOT_R       = 4;
+const int BLE_TEXT_W      = 18;  // "BLE" = 3 chars * FONT1_W
+const int BLE_DOT_CLEAR_PAD = 2;
+const int BLE_DOT_Y       = 8;
+const int BLE_BAR_H       = 12;
+const int BLE_LABEL_GAP   = 2;  // gap between dot and "BLE" text
+const int BLE_PCT_GAP     = 4;  // gap between "BLE" text and percentage
+
+// Connected screen key grid
+const int GRID_TOP_Y      = 22;
+const int GRID_BLOCK_H    = 35;
+const int GRID_GAP        = 3;
+const int GRID_BLOCK_W    = 57;
+
+// Waiting text
+const int WAITING_Y       = 50;
+
+// Flash overlay
+const int FLASH_DELAY      = 200;
+
 void drawKeyBlock(int x, int y, int w, int h, uint16_t bg, const char* label, const char* action) {
-  M5Cardputer.Display.fillRoundRect(x, y, w, h, 3, bg);
+  M5Cardputer.Display.fillRoundRect(x, y, w, h, KEY_CORNER_R, bg);
   M5Cardputer.Display.setTextColor(BLACK);
   // Label: size 2, auto-shrink if too wide
   int labelLen = strlen(label);
-  if (labelLen * 12 <= w - 4) {
+  if (labelLen * FONT2_W <= w - KEY_LABEL_PAD) {
     M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setCursor(x + (w - labelLen * 12) / 2, y + 2);
+    M5Cardputer.Display.setCursor(x + (w - labelLen * FONT2_W) / 2, y + KEY_LABEL_Y1);
   } else {
     M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setCursor(x + (w - labelLen * 6) / 2, y + 6);
+    M5Cardputer.Display.setCursor(x + (w - labelLen * FONT1_W) / 2, y + KEY_LABEL_Y1_SM);
   }
   M5Cardputer.Display.print(label);
   // Action: size 1.5 if fits, else size 1
   int actionLen = strlen(action);
-  if (actionLen * 9 <= w - 2) {
+  if (actionLen * FONT15_W <= w - KEY_ACTION_PAD) {
     M5Cardputer.Display.setTextSize(1.5);
-    M5Cardputer.Display.setCursor(x + (w - actionLen * 9) / 2, y + h - 14);
+    M5Cardputer.Display.setCursor(x + (w - actionLen * FONT15_W) / 2, y + h - KEY_ACTION_BOT1);
   } else {
     M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setCursor(x + (w - actionLen * 6) / 2, y + h - 10);
+    M5Cardputer.Display.setCursor(x + (w - actionLen * FONT1_W) / 2, y + h - KEY_ACTION_BOT2);
   }
   M5Cardputer.Display.print(action);
 }
@@ -203,25 +248,25 @@ void updateBattery() {
   // Top-right: BLE dot + battery percentage
   char buf[16];
   snprintf(buf, sizeof(buf), "%d%%", pct);
-  int tw = strlen(buf) * 6;
-  int dotR = 4;
-  int bleTextW = 18; // "BLE" = 3 chars * 6px
-  int dotX = SCREEN_W - tw - bleTextW - dotR - 14;
+  int tw = strlen(buf) * FONT1_W;
+  int totalW = BLE_DOT_R + BLE_LABEL_GAP + BLE_TEXT_W + BLE_PCT_GAP + tw;
+  int dotX = SCREEN_W - totalW - BLE_DOT_R - BLE_DOT_CLEAR_PAD * 2;
   // Clear area for dot + BLE + percentage
-  M5Cardputer.Display.fillRect(dotX - dotR - 2, 2, SCREEN_W - dotX + dotR + 4, 12, BLACK);
+  M5Cardputer.Display.fillRect(dotX - BLE_DOT_R - BLE_DOT_CLEAR_PAD, BLE_DOT_CLEAR_PAD,
+    SCREEN_W - dotX + BLE_DOT_R + BLE_DOT_CLEAR_PAD * 2, BLE_BAR_H, BLACK);
   // BLE status dot + label
   uint16_t bleCol = connected ? GREEN : RED;
-  M5Cardputer.Display.fillCircle(dotX, 8, dotR, bleCol);
+  M5Cardputer.Display.fillCircle(dotX, BLE_DOT_Y, BLE_DOT_R, bleCol);
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(DARKGREY);
-  M5Cardputer.Display.setCursor(dotX + dotR + 2, 4);
+  M5Cardputer.Display.setCursor(dotX + BLE_DOT_R + BLE_LABEL_GAP, STATUS_TEXT_Y);
   M5Cardputer.Display.print("BLE");
   // Battery percentage
   M5Cardputer.Display.setTextSize(1);
   if (pct > 50)      M5Cardputer.Display.setTextColor(GREEN);
   else if (pct > 20) M5Cardputer.Display.setTextColor(YELLOW);
   else               M5Cardputer.Display.setTextColor(RED);
-  M5Cardputer.Display.setCursor(dotX + dotR + bleTextW + 4, 4);
+  M5Cardputer.Display.setCursor(dotX + BLE_DOT_R + BLE_TEXT_W + BLE_PCT_GAP, STATUS_TEXT_Y);
   M5Cardputer.Display.print(buf);
 }
 
@@ -229,44 +274,41 @@ void drawStatus() {
   if (!screenOn) return;
   M5Cardputer.Display.fillScreen(BLACK);
 
-  // Top bar: device name (left) + BLE dot (right)
   // Top bar: device name (left) + BLE dot + battery (right via updateBattery)
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setTextColor(DARKGREY);
-  M5Cardputer.Display.setCursor(4, 4);
+  M5Cardputer.Display.setCursor(STATUS_MARGIN, STATUS_TEXT_Y);
   M5Cardputer.Display.print(fullDeviceName);
   updateBattery();
 
   if (!connected) {
     M5Cardputer.Display.setTextSize(2);
     M5Cardputer.Display.setTextColor(YELLOW);
-    M5Cardputer.Display.setCursor(4, 50);
+    M5Cardputer.Display.setCursor(STATUS_MARGIN, WAITING_Y);
     M5Cardputer.Display.print("Waiting...");
     updateBattery();
     return;
   }
 
   // Row 1: 1-4   Row 2: 5-8   Row 3: Fn, Tab, Enter, Esc
-  // Full height available: 135 - 22(title) = 113, 3 rows + 2 gaps
-  int y1 = 22, bh = 35, gap = 3, numW = 57;
+  // Full height available: SCREEN_H - GRID_TOP_Y, 3 rows + 2 gaps
   const char* nums[] = {"1","2","3","4","5","6","7","8"};
   for (int i = 0; i < 4; i++) {
     char action[8];
     snprintf(action, sizeof(action), "CMD+%s", nums[i]);
-    drawKeyBlock(4 + i * (numW + gap), y1, numW, bh, COL_KEY_NUM, nums[i], action);
+    drawKeyBlock(STATUS_MARGIN + i * (GRID_BLOCK_W + GRID_GAP), GRID_TOP_Y, GRID_BLOCK_W, GRID_BLOCK_H, COL_KEY_NUM, nums[i], action);
   }
-  int y2 = y1 + bh + gap;
+  int y2 = GRID_TOP_Y + GRID_BLOCK_H + GRID_GAP;
   for (int i = 4; i < 8; i++) {
     char action[8];
     snprintf(action, sizeof(action), "CMD+%s", nums[i]);
-    drawKeyBlock(4 + (i - 4) * (numW + gap), y2, numW, bh, COL_KEY_NUM, nums[i], action);
+    drawKeyBlock(STATUS_MARGIN + (i - 4) * (GRID_BLOCK_W + GRID_GAP), y2, GRID_BLOCK_W, GRID_BLOCK_H, COL_KEY_NUM, nums[i], action);
   }
-  int y3 = y2 + bh + gap;
-  int w3 = 57;
-  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "Ctrl", "OPT+TAB");
-  drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Fn", "ENTER");
-  drawKeyBlock(4 + (w3 + gap) * 2, y3, w3, bh, COL_KEY_ENT, "Enter", "ENTER");
-  drawKeyBlock(4 + (w3 + gap) * 3, y3, w3, bh, COL_KEY_ESC, "`", "ESC");
+  int y3 = y2 + GRID_BLOCK_H + GRID_GAP;
+  drawKeyBlock(STATUS_MARGIN, y3, GRID_BLOCK_W, GRID_BLOCK_H, COL_KEY_FN, "Ctrl", "OPT+TAB");
+  drawKeyBlock(STATUS_MARGIN + GRID_BLOCK_W + GRID_GAP, y3, GRID_BLOCK_W, GRID_BLOCK_H, COL_KEY_ENT, "Fn", "ENTER");
+  drawKeyBlock(STATUS_MARGIN + (GRID_BLOCK_W + GRID_GAP) * 2, y3, GRID_BLOCK_W, GRID_BLOCK_H, COL_KEY_ENT, "Enter", "ENTER");
+  drawKeyBlock(STATUS_MARGIN + (GRID_BLOCK_W + GRID_GAP) * 3, y3, GRID_BLOCK_W, GRID_BLOCK_H, COL_KEY_ESC, "`", "ESC");
 
   updateBattery();
 }
@@ -274,16 +316,16 @@ void drawStatus() {
 void showFlash(const char* text, uint16_t color) {
   if (!screenOn) {
     M5Cardputer.Display.wakeup();
-    M5Cardputer.Display.setBrightness(80);
+    M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
   M5Cardputer.Display.fillScreen(color);
   M5Cardputer.Display.setTextSize(3);
   M5Cardputer.Display.setTextColor(BLACK);
-  int tw = strlen(text) * 18;
-  M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - 24) / 2);
+  int tw = strlen(text) * FONT3_W;
+  M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - FONT3_H) / 2);
   M5Cardputer.Display.print(text);
-  delay(200);
+  delay(FLASH_DELAY);
   drawStatus();
   lastActivity = millis();
 }
@@ -295,29 +337,82 @@ void showFlash(const char* text, uint16_t color) {
 //   Power:    right side edge, top  → left half-circle, right edge (flush)
 //   Button B: left side edge, mid   → right half-circle, left edge (flush)
 
+// Font metrics
+const int FONT1_W = 6;
+const int FONT1_H = 8;
+const int FONT2_W = 12;
+const int FONT2_H = 16;
+const int FONT3_W = 18;
+const int FONT3_H = 24;
+const int FONT4_W = 24;
+
+// Indicator/button dots
+const int INDICATOR_R      = 8;
+const int INDICATOR_PAD    = 2;  // gap from edge for dot center
+
+// Block layout
+const int BLOCK_X          = 16;
+const int BLOCK_W          = 100;
+const int BLOCK_H          = 48;
+const int BLOCK_GAP        = 6;
+const int BLOCK_CORNER_R   = 4;
+const int BLOCK_TEXT1_Y    = 4;   // first line y offset within block
+const int BLOCK_TEXT2_Y    = 26;  // second line y offset within block
+const int BLOCK_LINE_GAP   = 6;  // gap from dot to first block
+#define COL_BLOCK_DARK     0x4208  // dark grey for inactive block
+
+// Status bar / bottom area
+const int NAME_Y           = 210;
+const int NAME_H           = 10;
+const int BAT_Y            = 222;
+const int BAT_AREA_H       = 18;
+const int STATUS_MARGIN     = 4;
+
+// BLE indicator (bottom bar)
+const int BLE_DOT_X        = 10;
+const int BLE_DOT_R        = 4;
+const int BLE_DOT_CY_OFF   = 8;  // dot center y offset from batY
+const int BLE_TEXT_X        = 18;
+const int BLE_TEXT_Y_OFF    = 5;  // text y offset from batY
+
+// Battery bar
+const int BAT_BAR_X        = 44;
+const int BAT_BAR_GAP      = 8;  // gap between bar end and percentage text
+const int BAT_BAR_H        = 8;
+const int BAT_BAR_Y_OFF    = 4;  // bar y offset from batY
+
+// Disconnect text layout
+const int DISC_TITLE_X     = 12;
+const int DISC_TITLE_Y     = 60;
+const int DISC_SUB_X       = 12;
+const int DISC_SUB_Y       = 100;
+
+// Flash overlay
+const int FLASH_TEXT_Y      = 100;
+const int FLASH_POWER_DELAY = 300;
+const int FLASH_BTNA_DELAY  = 500;
+
 void updateBattery() {
   int pct = getBatPercent();
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
   // Device name
-  int nameY = 210;
-  M5.Lcd.fillRect(0, nameY, 135, 10, BLACK);
+  M5.Lcd.fillRect(0, NAME_Y, SCREEN_W, NAME_H, BLACK);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(DARKGREY);
-  int nameW = strlen(fullDeviceName) * 6;
-  M5.Lcd.setCursor((135 - nameW) / 2, nameY + 1);
+  int nameW = strlen(fullDeviceName) * FONT1_W;
+  M5.Lcd.setCursor((SCREEN_W - nameW) / 2, NAME_Y + 1);
   M5.Lcd.print(fullDeviceName);
 
-  int batY = 222;
-  M5.Lcd.fillRect(0, batY, 135, 18, BLACK);
+  M5.Lcd.fillRect(0, BAT_Y, SCREEN_W, BAT_AREA_H, BLACK);
 
   // BLE status dot
   uint16_t bleCol = connected ? GREEN : RED;
-  M5.Lcd.fillCircle(10, batY + 8, 4, bleCol);
+  M5.Lcd.fillCircle(BLE_DOT_X, BAT_Y + BLE_DOT_CY_OFF, BLE_DOT_R, bleCol);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(DARKGREY);
-  M5.Lcd.setCursor(18, batY + 5);
+  M5.Lcd.setCursor(BLE_TEXT_X, BAT_Y + BLE_TEXT_Y_OFF);
   M5.Lcd.print("BLE");
 
   // Battery percentage
@@ -325,16 +420,16 @@ void updateBattery() {
   M5.Lcd.setTextColor(batCol);
   char buf[8];
   snprintf(buf, sizeof(buf), "%d%%", pct);
-  int tw = strlen(buf) * 6;
-  M5.Lcd.setCursor(135 - tw - 4, batY + 5);
+  int tw = strlen(buf) * FONT1_W;
+  M5.Lcd.setCursor(SCREEN_W - tw - STATUS_MARGIN, BAT_Y + BLE_TEXT_Y_OFF);
   M5.Lcd.print(buf);
 
   // Battery bar
-  int barX = 44, barW = 135 - tw - barX - 8, barH = 8;
-  M5.Lcd.drawRect(barX, batY + 4, barW, barH, DARKGREY);
-  M5.Lcd.fillRect(barX + 1, batY + 5, barW - 2, barH - 2, BLACK);
+  int barW = SCREEN_W - tw - BAT_BAR_X - BAT_BAR_GAP;
+  M5.Lcd.drawRect(BAT_BAR_X, BAT_Y + BAT_BAR_Y_OFF, barW, BAT_BAR_H, DARKGREY);
+  M5.Lcd.fillRect(BAT_BAR_X + 1, BAT_Y + BAT_BAR_Y_OFF + 1, barW - 2, BAT_BAR_H - 2, BLACK);
   int fillW = (barW - 2) * pct / 100;
-  if (fillW > 0) M5.Lcd.fillRect(barX + 1, batY + 5, fillW, barH - 2, batCol);
+  if (fillW > 0) M5.Lcd.fillRect(BAT_BAR_X + 1, BAT_Y + BAT_BAR_Y_OFF + 1, fillW, BAT_BAR_H - 2, batCol);
 }
 
 void drawStatus() {
@@ -344,82 +439,74 @@ void drawStatus() {
   if (!connected) {
     M5.Lcd.setTextSize(3);
     M5.Lcd.setTextColor(YELLOW);
-    M5.Lcd.setCursor(12, 60);
+    M5.Lcd.setCursor(DISC_TITLE_X, DISC_TITLE_Y);
     M5.Lcd.print("BLE KB");
     M5.Lcd.setTextSize(1);
     M5.Lcd.setTextColor(DARKGREY);
-    M5.Lcd.setCursor(12, 100);
+    M5.Lcd.setCursor(DISC_SUB_X, DISC_SUB_Y);
     M5.Lcd.print("Waiting for pair...");
     updateBattery();
     return;
   }
 
-  // Layout constants
-  int W = 135;
-  int blockX = 16, blockW = 100;
-  int blockH = 48, gap = 6;
-  int r = 8;
-  int blockRight = blockX + blockW;         // 116
-  int lineX = blockRight + (W - blockRight) / 2;  // center of right margin
+  // Derived layout values
+  int blockRight = BLOCK_X + BLOCK_W;
+  int lineX = blockRight + (SCREEN_W - blockRight) / 2;
 
   // === Button A: full circle, top center ===
-  int dotA_y = r + 2;
-  M5.Lcd.fillCircle(W / 2, dotA_y, r, CYAN);
+  int dotA_y = INDICATOR_R + INDICATOR_PAD;
+  M5.Lcd.fillCircle(SCREEN_W / 2, dotA_y, INDICATOR_R, CYAN);
 
   // === Power: left half-circle, flush with right edge ===
-  M5.Lcd.fillCircle(W - 1, dotA_y, r, MAGENTA);
+  M5.Lcd.fillCircle(SCREEN_W - 1, dotA_y, INDICATOR_R, MAGENTA);
 
   // Line from A dot down to block A
-  int blockA_y = dotA_y + r + 6;
-  M5.Lcd.drawLine(W / 2, dotA_y + r, W / 2, blockA_y, CYAN);
+  int blockA_y = dotA_y + INDICATOR_R + BLOCK_LINE_GAP;
+  M5.Lcd.drawLine(SCREEN_W / 2, dotA_y + INDICATOR_R, SCREEN_W / 2, blockA_y, CYAN);
 
   // Block A
-  M5.Lcd.fillRoundRect(blockX, blockA_y, blockW, blockH, 4, CYAN);
+  M5.Lcd.fillRoundRect(BLOCK_X, blockA_y, BLOCK_W, BLOCK_H, BLOCK_CORNER_R, CYAN);
   M5.Lcd.setTextColor(BLACK);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 12) / 2, blockA_y + 4);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - FONT2_W) / 2, blockA_y + BLOCK_TEXT1_Y);
   M5.Lcd.print("A");
-  M5.Lcd.setCursor(blockX + (blockW - 84) / 2, blockA_y + 26);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 7 * FONT2_W) / 2, blockA_y + BLOCK_TEXT2_Y);
   M5.Lcd.print("OPT+TAB");
 
   // === Button B: right half-circle, flush with left edge ===
-  int blockB_y = blockA_y + blockH + gap;
-  int blockB_mid = blockB_y + blockH / 2;
-  M5.Lcd.fillCircle(0, blockB_mid, r, DARKGREY);
-  M5.Lcd.drawLine(r, blockB_mid, blockX, blockB_mid, DARKGREY);
+  int blockB_y = blockA_y + BLOCK_H + BLOCK_GAP;
+  int blockB_mid = blockB_y + BLOCK_H / 2;
+  M5.Lcd.fillCircle(0, blockB_mid, INDICATOR_R, DARKGREY);
+  M5.Lcd.drawLine(INDICATOR_R, blockB_mid, BLOCK_X, blockB_mid, DARKGREY);
 
   // Block B
-  M5.Lcd.fillRoundRect(blockX, blockB_y, blockW, blockH, 4, 0x4208);
+  M5.Lcd.fillRoundRect(BLOCK_X, blockB_y, BLOCK_W, BLOCK_H, BLOCK_CORNER_R, COL_BLOCK_DARK);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 12) / 2, blockB_y + 4);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - FONT2_W) / 2, blockB_y + BLOCK_TEXT1_Y);
   M5.Lcd.print("B");
-  M5.Lcd.setCursor(blockX + (blockW - 48) / 2, blockB_y + 26);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 4 * FONT2_W) / 2, blockB_y + BLOCK_TEXT2_Y);
   M5.Lcd.print("WAKE");
 
   // === Power line: half-circle → diagonal → vertical → diagonal → block ===
-  int blockP_y = blockB_y + blockH + gap;
+  int blockP_y = blockB_y + BLOCK_H + BLOCK_GAP;
 
   // Start from bottom-left edge of half-circle (on the circle perimeter)
-  // Circle center (W-1, dotA_y), r. Pick point at ~240° on circle.
-  int diagStartX = W - 1 - r / 2;        // midpoint of visible half-circle
-  int diagStartY = dotA_y + r - 1;        // near bottom edge of circle
-  // Diagonal down to vertical line x
+  int diagStartX = SCREEN_W - 1 - INDICATOR_R / 2;
+  int diagStartY = dotA_y + INDICATOR_R - 1;
   int vertStartY = diagStartY + (diagStartX - lineX);
   M5.Lcd.drawLine(diagStartX, diagStartY, lineX, vertStartY, MAGENTA);
-  // Vertical down
-  int vertEndY = blockP_y + blockH / 4;
+  int vertEndY = blockP_y + BLOCK_H / 4;
   M5.Lcd.drawLine(lineX, vertStartY, lineX, vertEndY, MAGENTA);
-  // Diagonal into block right edge
-  M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + blockH / 2, MAGENTA);
+  M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + BLOCK_H / 2, MAGENTA);
 
   // Block PWR
-  M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 4, MAGENTA);
+  M5.Lcd.fillRoundRect(BLOCK_X, blockP_y, BLOCK_W, BLOCK_H, BLOCK_CORNER_R, MAGENTA);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 36) / 2, blockP_y + 4);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 3 * FONT2_W) / 2, blockP_y + BLOCK_TEXT1_Y);
   M5.Lcd.print("PWR");
-  M5.Lcd.setCursor(blockX + (blockW - 60) / 2, blockP_y + 26);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 5 * FONT2_W) / 2, blockP_y + BLOCK_TEXT2_Y);
   M5.Lcd.print("ENTER");
 
   updateBattery();
@@ -428,15 +515,15 @@ void drawStatus() {
 void flashPower() {
   if (!screenOn) {
     M5.Axp.SetLDO2(true);
-    M5.Axp.ScreenBreath(80);
+    M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
   M5.Lcd.fillScreen(MAGENTA);
   M5.Lcd.setTextSize(4);
   M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor((135 - 120) / 2, 100);
+  M5.Lcd.setCursor((SCREEN_W - 5 * FONT4_W) / 2, FLASH_TEXT_Y);
   M5.Lcd.print("ENTER");
-  delay(300);
+  delay(FLASH_POWER_DELAY);
   drawStatus();
   lastActivity = millis();
 }
@@ -444,15 +531,15 @@ void flashPower() {
 void flashBtnA() {
   if (!screenOn) {
     M5.Axp.SetLDO2(true);
-    M5.Axp.ScreenBreath(80);
+    M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
   M5.Lcd.fillScreen(CYAN);
   M5.Lcd.setTextSize(3);
   M5.Lcd.setTextColor(BLACK);
-  M5.Lcd.setCursor((135 - 126) / 2, 100);
+  M5.Lcd.setCursor((SCREEN_W - 7 * FONT3_W) / 2, FLASH_TEXT_Y);
   M5.Lcd.print("OPT+TAB");
-  delay(500);
+  delay(FLASH_BTNA_DELAY);
   drawStatus();
   lastActivity = millis();
 }
@@ -461,55 +548,113 @@ void flashBtnA() {
 // ----- M5StickC: portrait 80x160, rotation 2, USB end UP -----
 // Same physical layout as Plus, smaller screen
 
+// Font metrics
+const int FONT1_W = 6;
+const int FONT1_H = 8;
+const int FONT2_W = 12;
+const int FONT2_H = 16;
+
+// Indicator/button dots
+const int INDICATOR_R      = 6;
+const int INDICATOR_PAD    = 2;
+
+// Block layout
+const int BLOCK_X          = 10;
+const int BLOCK_W          = 60;
+const int BLOCK_H          = 32;
+const int BLOCK_GAP        = 4;
+const int BLOCK_CORNER_R   = 3;
+const int BLOCK_TEXT1_Y    = 2;   // first line y offset within block
+const int BLOCK_TEXT2_Y    = 21;  // second line y offset within block (font size 1)
+const int BLOCK_LINE_GAP   = 4;  // gap from dot to first block
+#define COL_BLOCK_DARK     0x4208  // dark grey for inactive block
+
+// Derived: compute blocks_end_y (bottom of third block) from constants
+// dotA_y = INDICATOR_R + INDICATOR_PAD
+// blockA_y = dotA_y + INDICATOR_R + BLOCK_LINE_GAP
+// blockB_y = blockA_y + BLOCK_H + BLOCK_GAP
+// blockP_y = blockB_y + BLOCK_H + BLOCK_GAP
+// blocks_end_y = blockP_y + BLOCK_H
+const int BLOCKS_END_Y = (INDICATOR_R + INDICATOR_PAD) + INDICATOR_R + BLOCK_LINE_GAP
+                        + BLOCK_H + BLOCK_GAP
+                        + BLOCK_H + BLOCK_GAP
+                        + BLOCK_H;
+
+// Content area below blocks
+const int CONTENT_GAP      = 4;
+const int STATUS_MARGIN    = 2;
+const int NAME_MARGIN      = 4;  // total horizontal margin for name wrapping
+
+// BLE indicator (bottom bar)
+const int BLE_DOT_X        = 6;
+const int BLE_DOT_R        = 3;
+const int BLE_DOT_CY_OFF   = 5;
+const int BAT_AREA_H       = 12;
+
+// Battery bar
+const int BAT_BAR_X        = 14;
+const int BAT_BAR_GAP      = 6;
+const int BAT_BAR_H        = 6;
+const int BAT_BAR_Y_OFF    = 3;
+const int BAT_TEXT_Y_OFF   = 2;
+
+// Disconnect text layout
+const int DISC_TITLE_Y     = 40;
+const int DISC_SUB_Y       = 70;
+
+// Flash overlay
+const int FLASH_TEXT_Y     = 68;
+const int FLASH_POWER_DELAY = 300;
+const int FLASH_BTNA_DELAY  = 500;
+
 void updateBattery() {
   int pct = getBatPercent();
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
-  // Device name — may need 2 lines on 80px wide screen
-  int nameY = 124;
+  // Device name — may need 2 lines on narrow screen
+  int nameY = BLOCKS_END_Y + CONTENT_GAP;
   int nameLen = strlen(fullDeviceName);
-  int charW = 6;  // font size 1
-  int maxChars = (80 - 4) / charW;  // 12 chars per line, 2px margin each side
+  int maxChars = (SCREEN_W - NAME_MARGIN) / FONT1_W;
   int nameLines = (nameLen <= maxChars) ? 1 : 2;
-  M5.Lcd.fillRect(0, nameY, 80, nameLines * 8, BLACK);
+  M5.Lcd.fillRect(0, nameY, SCREEN_W, nameLines * FONT1_H, BLACK);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(DARKGREY);
   if (nameLines == 1) {
-    M5.Lcd.setCursor((80 - nameLen * charW) / 2, nameY);
+    M5.Lcd.setCursor((SCREEN_W - nameLen * FONT1_W) / 2, nameY);
     M5.Lcd.print(fullDeviceName);
   } else {
     // Line 1: first maxChars characters
-    int line1W = maxChars * charW;
-    M5.Lcd.setCursor((80 - line1W) / 2, nameY);
+    int line1W = maxChars * FONT1_W;
+    M5.Lcd.setCursor((SCREEN_W - line1W) / 2, nameY);
     for (int i = 0; i < maxChars; i++) M5.Lcd.write(fullDeviceName[i]);
     // Line 2: remaining characters, centered
     int remain = nameLen - maxChars;
-    int line2W = remain * charW;
-    M5.Lcd.setCursor((80 - line2W) / 2, nameY + 8);
+    int line2W = remain * FONT1_W;
+    M5.Lcd.setCursor((SCREEN_W - line2W) / 2, nameY + FONT1_H);
     M5.Lcd.print(fullDeviceName + maxChars);
   }
 
-  int batY = nameY + nameLines * 8 + 2;
-  M5.Lcd.fillRect(0, batY, 80, 12, BLACK);
+  int batY = nameY + nameLines * FONT1_H + CONTENT_GAP;
+  M5.Lcd.fillRect(0, batY, SCREEN_W, BAT_AREA_H, BLACK);
 
   uint16_t bleCol = connected ? GREEN : RED;
-  M5.Lcd.fillCircle(6, batY + 5, 3, bleCol);
+  M5.Lcd.fillCircle(BLE_DOT_X, batY + BLE_DOT_CY_OFF, BLE_DOT_R, bleCol);
 
   uint16_t batCol = pct > 50 ? GREEN : (pct > 20 ? YELLOW : RED);
   M5.Lcd.setTextSize(1);
   M5.Lcd.setTextColor(batCol);
   char buf[8];
   snprintf(buf, sizeof(buf), "%d%%", pct);
-  int tw = strlen(buf) * 6;
-  M5.Lcd.setCursor(80 - tw - 2, batY + 2);
+  int tw = strlen(buf) * FONT1_W;
+  M5.Lcd.setCursor(SCREEN_W - tw - STATUS_MARGIN, batY + BAT_TEXT_Y_OFF);
   M5.Lcd.print(buf);
 
-  int barX = 14, barW = 80 - tw - barX - 6, barH = 6;
-  M5.Lcd.drawRect(barX, batY + 3, barW, barH, DARKGREY);
-  M5.Lcd.fillRect(barX + 1, batY + 4, barW - 2, barH - 2, BLACK);
+  int barW = SCREEN_W - tw - BAT_BAR_X - BAT_BAR_GAP;
+  M5.Lcd.drawRect(BAT_BAR_X, batY + BAT_BAR_Y_OFF, barW, BAT_BAR_H, DARKGREY);
+  M5.Lcd.fillRect(BAT_BAR_X + 1, batY + BAT_BAR_Y_OFF + 1, barW - 2, BAT_BAR_H - 2, BLACK);
   int fillW = (barW - 2) * pct / 100;
-  if (fillW > 0) M5.Lcd.fillRect(barX + 1, batY + 4, fillW, barH - 2, batCol);
+  if (fillW > 0) M5.Lcd.fillRect(BAT_BAR_X + 1, batY + BAT_BAR_Y_OFF + 1, fillW, BAT_BAR_H - 2, batCol);
 }
 
 void drawStatus() {
@@ -519,78 +664,74 @@ void drawStatus() {
   if (!connected) {
     M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(YELLOW);
-    M5.Lcd.setCursor((80 - 72) / 2, 40);
+    M5.Lcd.setCursor((SCREEN_W - 6 * FONT2_W) / 2, DISC_TITLE_Y);
     M5.Lcd.print("BLE KB");
     M5.Lcd.setTextSize(1);
     M5.Lcd.setTextColor(DARKGREY);
-    M5.Lcd.setCursor((80 - 60) / 2, 70);
+    M5.Lcd.setCursor((SCREEN_W - 10 * FONT1_W) / 2, DISC_SUB_Y);
     M5.Lcd.print("Waiting...");
     updateBattery();
     return;
   }
 
-  int W = 80;
-  int blockX = 10, blockW = 60;
-  int blockH = 32, gap = 4;
-  int r = 6;
-  int blockRight = blockX + blockW;
-  int lineX = blockRight + (W - blockRight) / 2;
+  int blockRight = BLOCK_X + BLOCK_W;
+  int lineX = blockRight + (SCREEN_W - blockRight) / 2;
 
   // Button A: full circle, top center
-  int dotA_y = r + 2;
-  M5.Lcd.fillCircle(W / 2, dotA_y, r, CYAN);
+  int dotA_y = INDICATOR_R + INDICATOR_PAD;
+  M5.Lcd.fillCircle(SCREEN_W / 2, dotA_y, INDICATOR_R, CYAN);
 
   // Power: left half-circle, flush with right edge
-  M5.Lcd.fillCircle(W - 1, dotA_y, r, MAGENTA);
+  M5.Lcd.fillCircle(SCREEN_W - 1, dotA_y, INDICATOR_R, MAGENTA);
 
   // Line from A dot to block A
-  int blockA_y = dotA_y + r + 4;
-  M5.Lcd.drawLine(W / 2, dotA_y + r, W / 2, blockA_y, CYAN);
+  int blockA_y = dotA_y + INDICATOR_R + BLOCK_LINE_GAP;
+  M5.Lcd.drawLine(SCREEN_W / 2, dotA_y + INDICATOR_R, SCREEN_W / 2, blockA_y, CYAN);
 
   // Block A
-  M5.Lcd.fillRoundRect(blockX, blockA_y, blockW, blockH, 3, CYAN);
+  M5.Lcd.fillRoundRect(BLOCK_X, blockA_y, BLOCK_W, BLOCK_H, BLOCK_CORNER_R, CYAN);
   M5.Lcd.setTextColor(BLACK);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 12) / 2, blockA_y + 2);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - FONT2_W) / 2, blockA_y + BLOCK_TEXT1_Y);
   M5.Lcd.print("A");
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(blockX + (blockW - 42) / 2, blockA_y + 21);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 7 * FONT1_W) / 2, blockA_y + BLOCK_TEXT2_Y);
   M5.Lcd.print("OPT+TAB");
 
   // Button B: right half-circle, flush with left edge
-  int blockB_y = blockA_y + blockH + gap;
-  int blockB_mid = blockB_y + blockH / 2;
-  M5.Lcd.fillCircle(0, blockB_mid, r, DARKGREY);
-  M5.Lcd.drawLine(r, blockB_mid, blockX, blockB_mid, DARKGREY);
+  int blockB_y = blockA_y + BLOCK_H + BLOCK_GAP;
+  int blockB_mid = blockB_y + BLOCK_H / 2;
+  M5.Lcd.fillCircle(0, blockB_mid, INDICATOR_R, DARKGREY);
+  M5.Lcd.drawLine(INDICATOR_R, blockB_mid, BLOCK_X, blockB_mid, DARKGREY);
 
   // Block B
-  M5.Lcd.fillRoundRect(blockX, blockB_y, blockW, blockH, 3, 0x4208);
+  M5.Lcd.fillRoundRect(BLOCK_X, blockB_y, BLOCK_W, BLOCK_H, BLOCK_CORNER_R, COL_BLOCK_DARK);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 12) / 2, blockB_y + 2);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - FONT2_W) / 2, blockB_y + BLOCK_TEXT1_Y);
   M5.Lcd.print("B");
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(blockX + (blockW - 24) / 2, blockB_y + 21);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 4 * FONT1_W) / 2, blockB_y + BLOCK_TEXT2_Y);
   M5.Lcd.print("WAKE");
 
   // Power line: half-circle → diagonal → vertical → diagonal → block
-  int blockP_y = blockB_y + blockH + gap;
-  int diagStartX = W - 1 - r / 2;
-  int diagStartY = dotA_y + r - 1;
+  int blockP_y = blockB_y + BLOCK_H + BLOCK_GAP;
+  int diagStartX = SCREEN_W - 1 - INDICATOR_R / 2;
+  int diagStartY = dotA_y + INDICATOR_R - 1;
   int vertStartY = diagStartY + (diagStartX - lineX);
   M5.Lcd.drawLine(diagStartX, diagStartY, lineX, vertStartY, MAGENTA);
-  int vertEndY = blockP_y + blockH / 4;
+  int vertEndY = blockP_y + BLOCK_H / 4;
   M5.Lcd.drawLine(lineX, vertStartY, lineX, vertEndY, MAGENTA);
-  M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + blockH / 2, MAGENTA);
+  M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + BLOCK_H / 2, MAGENTA);
 
   // Block POWER
-  M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 3, MAGENTA);
+  M5.Lcd.fillRoundRect(BLOCK_X, blockP_y, BLOCK_W, BLOCK_H, BLOCK_CORNER_R, MAGENTA);
   M5.Lcd.setTextColor(WHITE);
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 60) / 2, blockP_y + 2);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 5 * FONT2_W) / 2, blockP_y + BLOCK_TEXT1_Y);
   M5.Lcd.print("POWER");
   M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(blockX + (blockW - 30) / 2, blockP_y + 21);
+  M5.Lcd.setCursor(BLOCK_X + (BLOCK_W - 5 * FONT1_W) / 2, blockP_y + BLOCK_TEXT2_Y);
   M5.Lcd.print("ENTER");
 
   updateBattery();
@@ -599,15 +740,15 @@ void drawStatus() {
 void flashPower() {
   if (!screenOn) {
     M5.Axp.SetLDO2(true);
-    M5.Axp.ScreenBreath(80);
+    M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
   M5.Lcd.fillScreen(MAGENTA);
   M5.Lcd.setTextSize(2);
   M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setCursor((80 - 60) / 2, 68);
+  M5.Lcd.setCursor((SCREEN_W - 5 * FONT2_W) / 2, FLASH_TEXT_Y);
   M5.Lcd.print("ENTER");
-  delay(300);
+  delay(FLASH_POWER_DELAY);
   drawStatus();
   lastActivity = millis();
 }
@@ -615,15 +756,15 @@ void flashPower() {
 void flashBtnA() {
   if (!screenOn) {
     M5.Axp.SetLDO2(true);
-    M5.Axp.ScreenBreath(80);
+    M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
   M5.Lcd.fillScreen(CYAN);
   M5.Lcd.setTextSize(2);
   M5.Lcd.setTextColor(BLACK);
-  M5.Lcd.setCursor((80 - 84) / 2, 68);
+  M5.Lcd.setCursor((SCREEN_W - 7 * FONT2_W) / 2, FLASH_TEXT_Y);
   M5.Lcd.print("OPT+TAB");
-  delay(500);
+  delay(FLASH_BTNA_DELAY);
   drawStatus();
   lastActivity = millis();
 }
@@ -639,11 +780,11 @@ void setup() {
   auto cfg = M5.config();
   M5Cardputer.begin(cfg);
   M5Cardputer.Display.setRotation(1);
-  M5Cardputer.Display.setBrightness(80);
+  M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
   M5Cardputer.Display.fillScreen(BLACK);
 #else
   M5.begin();
-  M5.Axp.ScreenBreath(80);
+  M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
   M5.Lcd.setRotation(LCD_ROTATION);
   M5.Lcd.fillScreen(BLACK);
   pinMode(LED_PIN, OUTPUT);
