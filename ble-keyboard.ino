@@ -205,18 +205,23 @@ void updateBattery() {
   snprintf(buf, sizeof(buf), "%d%%", pct);
   int tw = strlen(buf) * 6;
   int dotR = 4;
-  int dotX = SCREEN_W - tw - dotR - 10;
-  // Clear area for dot + percentage
-  M5Cardputer.Display.fillRect(dotX - dotR - 2, 2, SCREEN_W - dotX + dotR + 2, 12, BLACK);
-  // BLE status dot
+  int bleTextW = 18; // "BLE" = 3 chars * 6px
+  int dotX = SCREEN_W - tw - bleTextW - dotR - 14;
+  // Clear area for dot + BLE + percentage
+  M5Cardputer.Display.fillRect(dotX - dotR - 2, 2, SCREEN_W - dotX + dotR + 4, 12, BLACK);
+  // BLE status dot + label
   uint16_t bleCol = connected ? GREEN : RED;
   M5Cardputer.Display.fillCircle(dotX, 8, dotR, bleCol);
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(DARKGREY);
+  M5Cardputer.Display.setCursor(dotX + dotR + 2, 4);
+  M5Cardputer.Display.print("BLE");
   // Battery percentage
   M5Cardputer.Display.setTextSize(1);
   if (pct > 50)      M5Cardputer.Display.setTextColor(GREEN);
   else if (pct > 20) M5Cardputer.Display.setTextColor(YELLOW);
   else               M5Cardputer.Display.setTextColor(RED);
-  M5Cardputer.Display.setCursor(dotX + dotR + 4, 4);
+  M5Cardputer.Display.setCursor(dotX + dotR + bleTextW + 4, 4);
   M5Cardputer.Display.print(buf);
 }
 
@@ -563,15 +568,15 @@ void drawStatus() {
   M5.Lcd.drawLine(lineX, vertStartY, lineX, vertEndY, MAGENTA);
   M5.Lcd.drawLine(lineX, vertEndY, blockRight, blockP_y + blockH / 2, MAGENTA);
 
-  // Block PWR
+  // Block POWER
   M5.Lcd.fillRoundRect(blockX, blockP_y, blockW, blockH, 3, MAGENTA);
   M5.Lcd.setTextColor(WHITE);
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setCursor(blockX + (blockW - 18) / 2, blockP_y + 2);
-  M5.Lcd.print("PWR");
   M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(blockX + (blockW - 12) / 2, blockP_y + 14);
-  M5.Lcd.print("OK");
+  M5.Lcd.setCursor(blockX + (blockW - 60) / 2, blockP_y + 2);
+  M5.Lcd.print("POWER");
+  M5.Lcd.setTextSize(1);
+  M5.Lcd.setCursor(blockX + (blockW - 30) / 2, blockP_y + 21);
+  M5.Lcd.print("ENTER");
 
   updateBattery();
 }
