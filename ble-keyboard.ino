@@ -90,7 +90,6 @@ const int LED_PIN = 10;
 
 #if IS_CARDPUTER
 bool fnPrevHeld = false;
-bool fnComboUsed = false;
 #endif
 
 void buzzerTone(int freq, int ms) {
@@ -172,15 +171,25 @@ void screenSleep() {
 void drawKeyBlock(int x, int y, int w, int h, uint16_t bg, const char* label, const char* action) {
   M5Cardputer.Display.fillRoundRect(x, y, w, h, 3, bg);
   M5Cardputer.Display.setTextColor(BLACK);
-  // Label: bold size 2
-  M5Cardputer.Display.setTextSize(2);
-  int labelW = strlen(label) * 12;
-  M5Cardputer.Display.setCursor(x + (w - labelW) / 2, y + 2);
+  // Label: size 2, auto-shrink if too wide
+  int labelLen = strlen(label);
+  if (labelLen * 12 <= w - 4) {
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setCursor(x + (w - labelLen * 12) / 2, y + 2);
+  } else {
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setCursor(x + (w - labelLen * 6) / 2, y + 6);
+  }
   M5Cardputer.Display.print(label);
-  // Action: size 1
-  M5Cardputer.Display.setTextSize(1);
-  int actionW = strlen(action) * 6;
-  M5Cardputer.Display.setCursor(x + (w - actionW) / 2, y + h - 10);
+  // Action: size 1.5 if fits, else size 1
+  int actionLen = strlen(action);
+  if (actionLen * 9 <= w - 2) {
+    M5Cardputer.Display.setTextSize(1.5);
+    M5Cardputer.Display.setCursor(x + (w - actionLen * 9) / 2, y + h - 14);
+  } else {
+    M5Cardputer.Display.setTextSize(1);
+    M5Cardputer.Display.setCursor(x + (w - actionLen * 6) / 2, y + h - 10);
+  }
   M5Cardputer.Display.print(action);
 }
 
@@ -189,17 +198,16 @@ void updateBattery() {
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
-  int batY = SCREEN_H - 14;
-  M5Cardputer.Display.fillRect(0, batY, SCREEN_W, 14, BLACK);
+  // Top-right corner, same line as "Connected"
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d%%", pct);
+  int tw = strlen(buf) * 6;
+  M5Cardputer.Display.fillRect(SCREEN_W - tw - 6, 4, tw + 6, 10, BLACK);
   M5Cardputer.Display.setTextSize(1);
   if (pct > 50)      M5Cardputer.Display.setTextColor(GREEN);
   else if (pct > 20) M5Cardputer.Display.setTextColor(YELLOW);
   else               M5Cardputer.Display.setTextColor(RED);
-
-  char buf[16];
-  snprintf(buf, sizeof(buf), "BAT %d%%", pct);
-  int tw = strlen(buf) * 6;
-  M5Cardputer.Display.setCursor(SCREEN_W - tw - 4, batY + 3);
+  M5Cardputer.Display.setCursor(SCREEN_W - tw - 4, 4);
   M5Cardputer.Display.print(buf);
 }
 
@@ -225,7 +233,8 @@ void drawStatus() {
   M5Cardputer.Display.print("Connected");
 
   // Row 1: 1-4   Row 2: 5-8   Row 3: Fn, Tab, Enter, Esc
-  int y1 = 24, bh = 32, gap = 3, numW = 56;
+  // Full height available: 135 - 22(title) = 113, 3 rows + 2 gaps
+  int y1 = 22, bh = 35, gap = 3, numW = 57;
   const char* nums[] = {"1","2","3","4","5","6","7","8"};
   for (int i = 0; i < 4; i++) {
     char action[8];
@@ -239,11 +248,10 @@ void drawStatus() {
     drawKeyBlock(4 + (i - 4) * (numW + gap), y2, numW, bh, COL_KEY_NUM, nums[i], action);
   }
   int y3 = y2 + bh + gap;
-  int w3 = 56;
-  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "Fn", "Opt+Tab");
-  drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Tab", "Enter");
+  int w3 = 76;
+  drawKeyBlock(4, y3, w3, bh, COL_KEY_FN, "`", "Opt+Tab");
+  drawKeyBlock(4 + w3 + gap, y3, w3, bh, COL_KEY_ENT, "Fn", "Enter");
   drawKeyBlock(4 + (w3 + gap) * 2, y3, w3, bh, COL_KEY_ENT, "Enter", "Enter");
-  drawKeyBlock(4 + (w3 + gap) * 3, y3, w3, bh, COL_KEY_ESC, "`", "Esc");
 
   updateBattery();
 }
@@ -625,20 +633,12 @@ void loop() {
     auto& keys = M5Cardputer.Keyboard.keysState();
     bool fnNow = keys.fn;
 
-    if (fnNow && !fnPrevHeld) fnComboUsed = false;
-    if (fnNow && (keys.word.size() > 0 || keys.enter || keys.del)) fnComboUsed = true;
-
-    // Fn released alone → Opt+Tab (voice input)
-    bool fnJustReleased = fnPrevHeld && !fnNow && !fnComboUsed;
-    fnPrevHeld = fnNow;
-
-    if (fnJustReleased) {
-      bleKeyboard.press(KEY_LEFT_ALT);
-      bleKeyboard.press(KEY_TAB);
-      bleKeyboard.releaseAll();
-      showFlash("Opt+Tab", COL_KEY_FN);
-      return;
+    // Fn → Enter
+    if (fnNow && !fnPrevHeld) {
+      bleKeyboard.write(KEY_RETURN);
+      screenWake();
     }
+    fnPrevHeld = fnNow;
 
     if (!fnNow && M5Cardputer.Keyboard.isPressed()) {
       for (auto c : keys.word) {
@@ -651,16 +651,15 @@ void loop() {
             bleKeyboard.releaseAll();
             break;
           case '`':
-            bleKeyboard.write(KEY_ESC);
-            showFlash("Esc", COL_KEY_ESC);
+            // Backtick → Opt+Tab (voice input)
+            bleKeyboard.press(KEY_LEFT_ALT);
+            bleKeyboard.press(KEY_TAB);
+            bleKeyboard.releaseAll();
+            showFlash("Opt+Tab", COL_KEY_FN);
             break;
           default:
             break;
         }
-      }
-      if (keys.tab) {
-        bleKeyboard.write(KEY_RETURN);
-        screenWake();
       }
       if (keys.enter) {
         bleKeyboard.write(KEY_RETURN);
