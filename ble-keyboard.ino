@@ -107,6 +107,8 @@ unsigned long heldKeyStart = 0; // when the key was first pressed
 unsigned long heldKeyLast = 0;  // when last repeat was sent
 const unsigned long REPEAT_DELAY = 400;  // ms before repeat starts
 const unsigned long REPEAT_RATE  = 50;   // ms between repeats
+const uint8_t SCROLL_UP   = 0xFE;  // sentinel for key repeat tracking
+const uint8_t SCROLL_DOWN = 0xFF;
 #endif
 
 void buzzerTone(int freq, int ms) {
@@ -981,7 +983,17 @@ void loop() {
 
       for (auto c : keys.word) {
         screenWake();
-        if (fnNow) {
+        if (fnNow && ctrlNow && optNow) {
+          // Ctrl+Opt+Fn layer: mouse scroll
+          fnUsedAsModifier = true;
+          ctrlUsedAsModifier = true;
+          optUsedAsModifier = true;
+          switch (c) {
+            case ';': case ':':  bleKeyboard.sendMouseScroll(3); break;   // scroll up
+            case '.': case '>':  bleKeyboard.sendMouseScroll(-3); break;  // scroll down
+            default: break;
+          }
+        } else if (fnNow) {
           // Fn layer: arrow keys
           fnUsedAsModifier = true;
           switch (c) {
@@ -1033,10 +1045,15 @@ void loop() {
     #undef PRESS_MODS
     #undef SEND_WITH_MODS
 
-    // Track held key for repeat (backspace + arrow keys)
+    // Track held key for repeat (backspace, arrow keys, scroll)
     uint8_t newHeld = 0;
     if (keys.del) {
       newHeld = KEY_BACKSPACE;
+    } else if (fnNow && ctrlNow && optNow) {
+      for (auto c : keys.word) {
+        if (c == ';' || c == ':') { newHeld = SCROLL_UP; break; }
+        if (c == '.' || c == '>') { newHeld = SCROLL_DOWN; break; }
+      }
     } else if (fnNow) {
       for (auto c : keys.word) {
         if (c == ';' || c == ':') { newHeld = KEY_UP_ARROW; break; }
@@ -1059,7 +1076,13 @@ void loop() {
     unsigned long now = millis();
     unsigned long elapsed = now - heldKeyStart;
     if (elapsed >= REPEAT_DELAY && (now - heldKeyLast) >= REPEAT_RATE) {
-      bleKeyboard.write(heldKey);
+      if (heldKey == SCROLL_UP) {
+        bleKeyboard.sendMouseScroll(3);
+      } else if (heldKey == SCROLL_DOWN) {
+        bleKeyboard.sendMouseScroll(-3);
+      } else {
+        bleKeyboard.write(heldKey);
+      }
       heldKeyLast = now;
       screenWake();
     }
