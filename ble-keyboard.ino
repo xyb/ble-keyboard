@@ -92,7 +92,21 @@ const int LED_PIN = 10;
 const int SCREEN_BRIGHTNESS = 80;
 
 #if IS_CARDPUTER
+// Modifier tap-hold state (tap = special function, hold = BLE modifier)
 bool fnPrevHeld = false;
+bool fnUsedAsModifier = false;
+bool ctrlPrevHeld = false;
+bool ctrlUsedAsModifier = false;
+bool optPrevHeld = false;
+bool optUsedAsModifier = false;
+bool capsLocked = false;
+
+// Key repeat state
+uint8_t heldKey = 0;            // which key is being held (0 = none)
+unsigned long heldKeyStart = 0; // when the key was first pressed
+unsigned long heldKeyLast = 0;  // when last repeat was sent
+const unsigned long REPEAT_DELAY = 400;  // ms before repeat starts
+const unsigned long REPEAT_RATE  = 50;   // ms between repeats
 #endif
 
 void buzzerTone(int freq, int ms) {
@@ -909,51 +923,145 @@ void loop() {
     if (M5Cardputer.Keyboard.isPressed()) screenWake();
 
     auto& keys = M5Cardputer.Keyboard.keysState();
+    bool fnNow   = keys.fn;
+    bool ctrlNow = keys.ctrl;
+    bool optNow  = keys.opt;
+    bool shiftOn = keys.shift;
 
-    // Fn → Enter (on press)
-    bool fnNow = keys.fn;
-    if (fnNow && !fnPrevHeld) {
+    // --- Modifier tap-hold: on press, reset "used as modifier" flag ---
+    if (fnNow && !fnPrevHeld)     fnUsedAsModifier = false;
+    if (ctrlNow && !ctrlPrevHeld) ctrlUsedAsModifier = false;
+    if (optNow && !optPrevHeld)   optUsedAsModifier = false;
+
+    // --- Modifier tap-hold: on release, fire tap action if not used as modifier ---
+    if (!fnNow && fnPrevHeld && !fnUsedAsModifier) {
       bleKeyboard.write(KEY_RETURN);
       showFlash("Enter", COL_KEY_ENT);
+      screenWake();
     }
-    fnPrevHeld = fnNow;
-
-    // Ctrl → Opt+Tab (voice input, on press)
-    static bool ctrlPrev = false;
-    if (keys.ctrl && !ctrlPrev) {
+    if (!ctrlNow && ctrlPrevHeld && !ctrlUsedAsModifier) {
       bleKeyboard.press(KEY_LEFT_ALT);
       bleKeyboard.press(KEY_TAB);
       bleKeyboard.releaseAll();
       showFlash("Opt+Tab", COL_KEY_FN);
+      screenWake();
     }
-    ctrlPrev = keys.ctrl;
+    if (!optNow && optPrevHeld && !optUsedAsModifier) {
+      capsLocked = !capsLocked;
+      bleKeyboard.write(KEY_CAPS_LOCK);
+      showFlash(capsLocked ? "CAPS ON" : "caps off", TFT_YELLOW);
+      screenWake();
+    }
+    fnPrevHeld   = fnNow;
+    ctrlPrevHeld = ctrlNow;
+    optPrevHeld  = optNow;
+
+    // Which modifiers are active as BLE modifiers (held + other key)?
+    bool modCtrl  = ctrlNow;  // Ctrl held → BLE Ctrl modifier
+    bool modOpt   = optNow;   // Opt held  → BLE Alt/Option modifier
+    bool modShift = shiftOn;  // Shift held → BLE Shift modifier
+
+    // Helper: press active BLE modifiers
+    #define PRESS_MODS() do { \
+      if (modCtrl)  bleKeyboard.press(KEY_LEFT_CTRL);  \
+      if (modOpt)   bleKeyboard.press(KEY_LEFT_ALT);   \
+      if (modShift) bleKeyboard.press(KEY_LEFT_SHIFT);  \
+    } while(0)
+
+    // Helper: send a key with active modifiers
+    #define SEND_WITH_MODS(k) do { PRESS_MODS(); bleKeyboard.press(k); bleKeyboard.releaseAll(); } while(0)
 
     if (M5Cardputer.Keyboard.isPressed()) {
+      // Mark modifiers as "used" only when non-modifier keys are also pressed
+      bool hasContentKeys = !keys.word.empty() || keys.enter || keys.del || keys.space || keys.tab;
+      if (hasContentKeys) {
+        if (ctrlNow) ctrlUsedAsModifier = true;
+        if (optNow)  optUsedAsModifier = true;
+      }
+
       for (auto c : keys.word) {
         screenWake();
-        switch (c) {
-          case '1': case '2': case '3': case '4': case '5':
-          case '6': case '7': case '8': {
-            bleKeyboard.press(KEY_LEFT_GUI);
-            bleKeyboard.press(c);
-            bleKeyboard.releaseAll();
-            char msg[8];
-            snprintf(msg, sizeof(msg), "Cmd+%c", c);
-            showFlash(msg, COL_KEY_NUM);
-            break;
+        if (fnNow) {
+          // Fn layer: arrow keys
+          fnUsedAsModifier = true;
+          switch (c) {
+            case ';': case ':':  SEND_WITH_MODS(KEY_UP_ARROW); break;
+            case '.': case '>':  SEND_WITH_MODS(KEY_DOWN_ARROW); break;
+            case ',': case '<':  SEND_WITH_MODS(KEY_LEFT_ARROW); break;
+            case '/': case '?':  SEND_WITH_MODS(KEY_RIGHT_ARROW); break;
+            default: break;
           }
-          case '`':
-            bleKeyboard.write(KEY_ESC);
-            showFlash("Esc", COL_KEY_ESC);
-            break;
-          default:
-            break;
+        } else if (modCtrl || modOpt) {
+          // Ctrl/Opt held: send key with BLE modifier
+          // Undo library's shift effect (ctrl/shift triggers value_second)
+          char key = c;
+          if (key >= 'A' && key <= 'Z') key = key + 32;
+          PRESS_MODS();
+          bleKeyboard.press(key);
+          bleKeyboard.releaseAll();
+        } else {
+          // Normal mode (shift already applied by library for characters)
+          switch (c) {
+            case '1': case '2': case '3': case '4': case '5':
+            case '6': case '7': case '8': {
+              bleKeyboard.press(KEY_LEFT_GUI);
+              bleKeyboard.press(c);
+              bleKeyboard.releaseAll();
+              char msg[8];
+              snprintf(msg, sizeof(msg), "Cmd+%c", c);
+              showFlash(msg, COL_KEY_NUM);
+              break;
+            }
+            case '`':
+              bleKeyboard.write(KEY_ESC);
+              showFlash("Esc", COL_KEY_ESC);
+              break;
+            default:
+              bleKeyboard.write(c);
+              break;
+          }
         }
       }
-      if (keys.enter) {
-        bleKeyboard.write(KEY_RETURN);
-        screenWake();
+
+      // Special keys (boolean flags, not in keys.word)
+      if (keys.enter) { SEND_WITH_MODS(KEY_RETURN);    screenWake(); }
+      if (keys.del)   { SEND_WITH_MODS(KEY_BACKSPACE);  screenWake(); }
+      if (keys.space) { SEND_WITH_MODS(' ');             screenWake(); }
+      if (keys.tab)   { SEND_WITH_MODS(KEY_TAB);        screenWake(); }
+    }
+
+    #undef PRESS_MODS
+    #undef SEND_WITH_MODS
+
+    // Track held key for repeat (backspace + arrow keys)
+    uint8_t newHeld = 0;
+    if (keys.del) {
+      newHeld = KEY_BACKSPACE;
+    } else if (fnNow) {
+      for (auto c : keys.word) {
+        if (c == ';' || c == ':') { newHeld = KEY_UP_ARROW; break; }
+        if (c == '.' || c == '>') { newHeld = KEY_DOWN_ARROW; break; }
+        if (c == ',' || c == '<') { newHeld = KEY_LEFT_ARROW; break; }
+        if (c == '/' || c == '?') { newHeld = KEY_RIGHT_ARROW; break; }
       }
+    }
+    if (newHeld != heldKey) {
+      heldKey = newHeld;
+      heldKeyStart = millis();
+      heldKeyLast = 0;
+    }
+  } else if (heldKey && !M5Cardputer.Keyboard.isPressed()) {
+    heldKey = 0;
+  }
+
+  // Key repeat: runs every loop iteration, outside isChange()
+  if (heldKey && connected) {
+    unsigned long now = millis();
+    unsigned long elapsed = now - heldKeyStart;
+    if (elapsed >= REPEAT_DELAY && (now - heldKeyLast) >= REPEAT_RATE) {
+      bleKeyboard.write(heldKey);
+      heldKeyLast = now;
+      screenWake();
     }
   }
 
