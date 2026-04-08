@@ -81,6 +81,7 @@ const unsigned long BAT_INTERVAL_ACTIVE = 30000;
 const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
 const unsigned long POWEROFF_TIMEOUT = 1800000;
+const unsigned long UNPAIRED_POWEROFF = 300000;  // 5 min: auto off if never connected
 const int LOWBAT_THRESHOLD = 5;
 const int CHARGING_DROP_MARGIN = 2;
 const int BUZZER_FREQ = 2500;
@@ -110,6 +111,7 @@ const unsigned long REPEAT_DELAY = 400;  // ms before repeat starts
 const unsigned long REPEAT_RATE  = 50;   // ms between repeats
 const uint8_t SCROLL_UP   = 0xFE;  // sentinel for key repeat tracking
 const uint8_t SCROLL_DOWN = 0xFF;
+const int8_t  SCROLL_STEP = 3;     // scroll wheel delta per tick
 #endif
 
 void buzzerTone(int freq, int ms) {
@@ -226,8 +228,15 @@ const int GRID_BLOCK_H    = 35;
 const int GRID_GAP        = 3;
 const int GRID_BLOCK_W    = 57;
 
-// Waiting text
-const int WAITING_Y       = 50;
+// Waiting screen layout (4 lines, vertically centered in usable area)
+const int WAIT_AREA_TOP   = 18;   // below top status bar
+const int WAIT_LINE_H     = 16;   // text size 2 height
+const int WAIT_LINE_GAP   = 12;   // gap between lines
+// Total block: 4*16 + 3*12 = 100px, centered in 117px usable area
+const int WAIT_Y1         = WAIT_AREA_TOP + (SCREEN_H - WAIT_AREA_TOP - (4 * WAIT_LINE_H + 3 * WAIT_LINE_GAP)) / 2;
+const int WAIT_Y2         = WAIT_Y1 + WAIT_LINE_H + WAIT_LINE_GAP;
+const int WAIT_Y3         = WAIT_Y2 + WAIT_LINE_H + WAIT_LINE_GAP;
+const int WAIT_Y4         = WAIT_Y3 + WAIT_LINE_H + WAIT_LINE_GAP;
 
 // Flash overlay
 const int FLASH_DELAY      = 200;
@@ -299,19 +308,18 @@ void drawStatus() {
   updateBattery();
 
   if (!connected) {
-    // Device name in large font, centered — easy to identify when pairing
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setTextColor(WHITE);
-    int nameLen = strlen(fullDeviceName);
-    int nameX = (SCREEN_W - nameLen * FONT2_W) / 2;
-    M5Cardputer.Display.setCursor(nameX > 0 ? nameX : 0, 35);
-    M5Cardputer.Display.print(fullDeviceName);
-
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setTextColor(YELLOW);
-    int waitX = (SCREEN_W - 14 * FONT1_W) / 2;  // "Waiting..." ~14 chars
-    M5Cardputer.Display.setCursor(waitX > 0 ? waitX : 0, 70);
-    M5Cardputer.Display.print("Waiting...");
+    // 4-line waiting screen, all size 2, vertically centered
+    auto centerPrint = [](const char* msg, int y, uint16_t color) {
+      M5Cardputer.Display.setTextSize(2);
+      M5Cardputer.Display.setTextColor(color);
+      int x = (SCREEN_W - strlen(msg) * FONT2_W) / 2;
+      M5Cardputer.Display.setCursor(x > 0 ? x : 0, y);
+      M5Cardputer.Display.print(msg);
+    };
+    centerPrint(fullDeviceName,  WAIT_Y1, WHITE);   // device name
+    centerPrint("BLE Keyboard",  WAIT_Y2, CYAN);    // device type
+    centerPrint("Waiting...",    WAIT_Y3, YELLOW);   // status
+    centerPrint("Pair Bluetooth", WAIT_Y4, GREEN);   // action
     updateBattery();
     return;
   }
@@ -864,7 +872,7 @@ void loop() {
 
 #if IS_CARDPUTER
   // CardPuter: auto power off (deep sleep) after 5 min without connection
-  if (!connected && millis() >= 300000) {  // 5 minutes
+  if (!connected && millis() >= UNPAIRED_POWEROFF) {
     beepPowerOff();
     esp_deep_sleep_start();  // no wakeup source = effectively off, reset button to restart
   }
@@ -1007,8 +1015,8 @@ void loop() {
           ctrlUsedAsModifier = true;
           optUsedAsModifier = true;
           switch (c) {
-            case ';': case ':':  bleKeyboard.sendMouseScroll(3); break;   // scroll up
-            case '.': case '>':  bleKeyboard.sendMouseScroll(-3); break;  // scroll down
+            case ';': case ':':  bleKeyboard.sendMouseScroll(SCROLL_STEP); break;   // scroll up
+            case '.': case '>':  bleKeyboard.sendMouseScroll(-SCROLL_STEP); break;  // scroll down
             default: break;
           }
         } else if (fnNow) {
@@ -1095,9 +1103,9 @@ void loop() {
     unsigned long elapsed = now - heldKeyStart;
     if (elapsed >= REPEAT_DELAY && (now - heldKeyLast) >= REPEAT_RATE) {
       if (heldKey == SCROLL_UP) {
-        bleKeyboard.sendMouseScroll(3);
+        bleKeyboard.sendMouseScroll(SCROLL_STEP);
       } else if (heldKey == SCROLL_DOWN) {
-        bleKeyboard.sendMouseScroll(-3);
+        bleKeyboard.sendMouseScroll(-SCROLL_STEP);
       } else {
         bleKeyboard.write(heldKey);
       }
