@@ -1071,10 +1071,16 @@ void loop() {
     #undef PRESS_MODS
     #undef SEND_WITH_MODS
 
-    // Track held key for repeat (backspace, arrow keys, scroll)
+    // Track held key for repeat (all keys)
     uint8_t newHeld = 0;
     if (keys.del) {
       newHeld = KEY_BACKSPACE;
+    } else if (keys.space) {
+      newHeld = ' ';
+    } else if (keys.enter) {
+      newHeld = KEY_RETURN;
+    } else if (keys.tab) {
+      newHeld = KEY_TAB;
     } else if (ctrlNow && optNow && !fnNow) {
       for (auto c : keys.word) {
         if (c == ';' || c == ':') { newHeld = SCROLL_UP; break; }
@@ -1087,6 +1093,9 @@ void loop() {
         if (c == ',' || c == '<') { newHeld = KEY_LEFT_ARROW; break; }
         if (c == '/' || c == '?') { newHeld = KEY_RIGHT_ARROW; break; }
       }
+    } else if (!keys.word.empty() && !ctrlNow && !optNow) {
+      // Regular character: track for repeat
+      newHeld = keys.word[0];
     }
     if (newHeld != heldKey) {
       heldKey = newHeld;
