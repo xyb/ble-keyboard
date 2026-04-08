@@ -316,10 +316,10 @@ void drawStatus() {
       M5Cardputer.Display.setCursor(x > 0 ? x : 0, y);
       M5Cardputer.Display.print(msg);
     };
-    centerPrint(fullDeviceName,  WAIT_Y1, WHITE);   // device name
-    centerPrint("BLE Keyboard",  WAIT_Y2, CYAN);    // device type
-    centerPrint("Waiting...",    WAIT_Y3, YELLOW);   // status
-    centerPrint("Pair Bluetooth", WAIT_Y4, GREEN);   // action
+    centerPrint("BLE Keyboard",  WAIT_Y1, CYAN);      // type first
+    centerPrint(fullDeviceName,  WAIT_Y2, WHITE);    // then device name
+    centerPrint("Waiting...",    WAIT_Y3, YELLOW);   // status + action
+    centerPrint("Pair Bluetooth", WAIT_Y4, YELLOW);  // same color
     updateBattery();
     return;
   }
