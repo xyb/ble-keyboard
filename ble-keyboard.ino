@@ -983,14 +983,13 @@ void loop() {
 
       for (auto c : keys.word) {
         screenWake();
-        if (fnNow && ctrlNow && optNow) {
-          // Ctrl+Opt+Fn layer: mouse scroll
-          fnUsedAsModifier = true;
+        if (ctrlNow && optNow && !fnNow) {
+          // Ctrl+Opt layer: mouse scroll
           ctrlUsedAsModifier = true;
           optUsedAsModifier = true;
           switch (c) {
-            case ';': case ':':  bleKeyboard.sendMouseScroll(3); break;   // scroll up
-            case '.': case '>':  bleKeyboard.sendMouseScroll(-3); break;  // scroll down
+            case ';':  bleKeyboard.sendMouseScroll(3); break;   // scroll up
+            case '.':  bleKeyboard.sendMouseScroll(-3); break;  // scroll down
             default: break;
           }
         } else if (fnNow) {
@@ -1049,10 +1048,10 @@ void loop() {
     uint8_t newHeld = 0;
     if (keys.del) {
       newHeld = KEY_BACKSPACE;
-    } else if (fnNow && ctrlNow && optNow) {
+    } else if (ctrlNow && optNow && !fnNow) {
       for (auto c : keys.word) {
-        if (c == ';' || c == ':') { newHeld = SCROLL_UP; break; }
-        if (c == '.' || c == '>') { newHeld = SCROLL_DOWN; break; }
+        if (c == ';') { newHeld = SCROLL_UP; break; }
+        if (c == '.') { newHeld = SCROLL_DOWN; break; }
       }
     } else if (fnNow) {
       for (auto c : keys.word) {
