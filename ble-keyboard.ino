@@ -59,6 +59,7 @@
 
 #include <BleKeyboard.h>
 #include <esp_mac.h>
+#include <esp_sleep.h>
 
 BleKeyboard bleKeyboard(DEVICE_NAME, "M5Stack", 100);
 char fullDeviceName[32];  // "DeviceName-XXYY" with BLE MAC suffix
@@ -298,9 +299,18 @@ void drawStatus() {
   updateBattery();
 
   if (!connected) {
+    // Device name in large font, centered — easy to identify when pairing
     M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setTextColor(WHITE);
+    int nameLen = strlen(fullDeviceName);
+    int nameX = (SCREEN_W - nameLen * FONT2_W) / 2;
+    M5Cardputer.Display.setCursor(nameX > 0 ? nameX : 0, 35);
+    M5Cardputer.Display.print(fullDeviceName);
+
+    M5Cardputer.Display.setTextSize(1);
     M5Cardputer.Display.setTextColor(YELLOW);
-    M5Cardputer.Display.setCursor(STATUS_MARGIN, WAITING_Y);
+    int waitX = (SCREEN_W - 14 * FONT1_W) / 2;  // "Waiting..." ~14 chars
+    M5Cardputer.Display.setCursor(waitX > 0 ? waitX : 0, 70);
     M5Cardputer.Display.print("Waiting...");
     updateBattery();
     return;
@@ -847,10 +857,18 @@ void loop() {
     lastBatUpdate = millis();
   }
 
-  // Auto screen off
-  if (screenOn && (millis() - lastActivity >= SCREEN_TIMEOUT)) {
+  // Auto screen off (skip when not connected — keep screen on for pairing)
+  if (screenOn && connected && (millis() - lastActivity >= SCREEN_TIMEOUT)) {
     screenSleep();
   }
+
+#if IS_CARDPUTER
+  // CardPuter: auto power off (deep sleep) after 5 min without connection
+  if (!connected && millis() >= 300000) {  // 5 minutes
+    beepPowerOff();
+    esp_deep_sleep_start();  // no wakeup source = effectively off, reset button to restart
+  }
+#endif
 
 #if !IS_CARDPUTER
   // Auto power off after 30 min idle (skip if charging)
@@ -985,11 +1003,12 @@ void loop() {
         screenWake();
         if (ctrlNow && optNow && !fnNow) {
           // Ctrl+Opt layer: mouse scroll
+          // Note: Ctrl triggers value_second in library, so ; becomes : and . becomes >
           ctrlUsedAsModifier = true;
           optUsedAsModifier = true;
           switch (c) {
-            case ';':  bleKeyboard.sendMouseScroll(3); break;   // scroll up
-            case '.':  bleKeyboard.sendMouseScroll(-3); break;  // scroll down
+            case ';': case ':':  bleKeyboard.sendMouseScroll(3); break;   // scroll up
+            case '.': case '>':  bleKeyboard.sendMouseScroll(-3); break;  // scroll down
             default: break;
           }
         } else if (fnNow) {
@@ -1050,8 +1069,8 @@ void loop() {
       newHeld = KEY_BACKSPACE;
     } else if (ctrlNow && optNow && !fnNow) {
       for (auto c : keys.word) {
-        if (c == ';') { newHeld = SCROLL_UP; break; }
-        if (c == '.') { newHeld = SCROLL_DOWN; break; }
+        if (c == ';' || c == ':') { newHeld = SCROLL_UP; break; }
+        if (c == '.' || c == '>') { newHeld = SCROLL_DOWN; break; }
       }
     } else if (fnNow) {
       for (auto c : keys.word) {
