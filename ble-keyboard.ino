@@ -77,7 +77,7 @@ int lastPowerCheckBat = -1;
 bool warnedAt20 = false;
 bool warnedAt10 = false;
 
-const unsigned long BAT_INTERVAL_ACTIVE = 30000;
+const unsigned long BAT_INTERVAL_ACTIVE = 1000;  // 1s: fast refresh to catch state changes
 const unsigned long BAT_INTERVAL_IDLE = 300000;
 const unsigned long SCREEN_TIMEOUT = 5000;
 const unsigned long POWEROFF_TIMEOUT = 1800000;
@@ -271,13 +271,34 @@ void updateBattery() {
   bleKeyboard.setBatteryLevel(pct);
   if (!screenOn) return;
 
-  // Top-right: BLE dot + battery percentage
+  // Detect power state:
+  //   Method 1: hardware isCharging()
+  //   Method 2: getBatteryCurrent() > 0 (positive = charging)
+  //   Method 3: pct == 100 without confirmed charging = USB powered
+  auto chgState = M5Cardputer.Power.isCharging();
+  bool charging = (chgState == m5::Power_Class::is_charging);
+  if (!charging) {
+    int32_t current = M5Cardputer.Power.getBatteryCurrent();
+    charging = (current > 50);  // >50mA threshold to avoid noise
+  }
+  bool usbPowered = (pct >= 100 && !charging);
+
+  // Display: color by level, text suffix for state
+  uint16_t batCol = pct > 50 ? GREEN : (pct > 20 ? YELLOW : RED);
   char buf[16];
-  snprintf(buf, sizeof(buf), "%d%%", pct);
+  if (usbPowered) {
+    snprintf(buf, sizeof(buf), "USB");
+    batCol = GREEN;
+  } else if (charging) {
+    snprintf(buf, sizeof(buf), "%d%% CHG", pct);
+  } else {
+    snprintf(buf, sizeof(buf), "%d%%", pct);
+  }
+
   int tw = strlen(buf) * FONT1_W;
   int totalW = BLE_DOT_R + BLE_LABEL_GAP + BLE_TEXT_W + BLE_PCT_GAP + tw;
   int dotX = SCREEN_W - totalW - BLE_DOT_R - BLE_DOT_CLEAR_PAD * 2;
-  // Clear area for dot + BLE + percentage
+  // Clear area for dot + BLE + battery text
   M5Cardputer.Display.fillRect(dotX - BLE_DOT_R - BLE_DOT_CLEAR_PAD, BLE_DOT_CLEAR_PAD,
     SCREEN_W - dotX + BLE_DOT_R + BLE_DOT_CLEAR_PAD * 2, BLE_BAR_H, BLACK);
   // BLE status dot + label
@@ -287,11 +308,9 @@ void updateBattery() {
   M5Cardputer.Display.setTextColor(DARKGREY);
   M5Cardputer.Display.setCursor(dotX + BLE_DOT_R + BLE_LABEL_GAP, STATUS_TEXT_Y);
   M5Cardputer.Display.print("BLE");
-  // Battery percentage
+  // Battery / power status
   M5Cardputer.Display.setTextSize(1);
-  if (pct > 50)      M5Cardputer.Display.setTextColor(GREEN);
-  else if (pct > 20) M5Cardputer.Display.setTextColor(YELLOW);
-  else               M5Cardputer.Display.setTextColor(RED);
+  M5Cardputer.Display.setTextColor(batCol);
   M5Cardputer.Display.setCursor(dotX + BLE_DOT_R + BLE_TEXT_W + BLE_PCT_GAP, STATUS_TEXT_Y);
   M5Cardputer.Display.print(buf);
 }
