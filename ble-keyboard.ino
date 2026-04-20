@@ -1027,6 +1027,9 @@ void loop() {
       }
 
       for (auto c : keys.word) {
+        // Space is duplicated in both keys.word and keys.space by M5Cardputer lib.
+        // Handle it only via keys.space flag below (consistent with enter/del/tab).
+        if (c == ' ') continue;
         screenWake();
         if (ctrlNow && optNow && !fnNow) {
           // Ctrl+Opt layer: mouse scroll
@@ -1080,7 +1083,9 @@ void loop() {
         }
       }
 
-      // Special keys (boolean flags, not in keys.word)
+      // Special keys via boolean flags.
+      // Enter/del/tab are only in flags (not in keys.word).
+      // Space is in BOTH flag and word per M5Cardputer lib; word loop skips it so this is the single source of truth.
       if (keys.enter) { SEND_WITH_MODS(KEY_RETURN);    screenWake(); }
       if (keys.del)   { SEND_WITH_MODS(KEY_BACKSPACE);  screenWake(); }
       if (keys.space) { SEND_WITH_MODS(' ');             screenWake(); }
