@@ -94,6 +94,34 @@ const int LED_PIN = 10;
 const int SCREEN_BRIGHTNESS = 80;
 
 #if IS_CARDPUTER
+// ===== WiFi 配置模式 =====
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+
+enum CtrlAction { CTRL_OPT_TAB=0, CTRL_CMD_SPACE=1, CTRL_CMD_SHIFT_SEMI=2, CTRL_NONE=3 };
+enum OptAction  { OPT_CAPS_LOCK=0, OPT_ESC=1, OPT_NONE=2 };
+enum FnAction   { FN_ENTER=0, FN_TAB=1, FN_ESC=2, FN_NONE=3 };
+enum BacktickAction { BT_ESC=0, BT_BACKTICK=1 };
+enum NumAction { NUM_CMD_N=0, NUM_LITERAL=1 };
+
+struct KbConfig {
+  uint8_t ctrl_action     = CTRL_OPT_TAB;
+  uint8_t opt_action      = OPT_CAPS_LOCK;
+  uint8_t fn_action       = FN_ENTER;
+  uint8_t backtick_action = BT_ESC;
+  uint8_t num_action      = NUM_CMD_N;
+};
+KbConfig g_config;
+
+bool g_config_mode = false;
+WebServer* g_web = nullptr;
+char g_apSsid[32] = {0};
+
+// Long-press Fn detector (entry into config mode)
+unsigned long fnPressStart = 0;
+const unsigned long FN_LONG_PRESS_MS = 5000;
+
 // Modifier tap-hold state (tap = special function, hold = BLE modifier)
 bool fnPrevHeld = false;
 bool fnUsedAsModifier = false;
@@ -825,16 +853,365 @@ void flashBtnA() {
 #endif
 
 // ============================================================
+//  WiFi 配置模式：NVS + action helpers + AP/web server
+// ============================================================
+#if IS_CARDPUTER
+
+void loadConfig() {
+  Preferences prefs;
+  prefs.begin("kb", true);
+  g_config.ctrl_action     = prefs.getUChar("ctrl", CTRL_OPT_TAB);
+  g_config.opt_action      = prefs.getUChar("opt",  OPT_CAPS_LOCK);
+  g_config.fn_action       = prefs.getUChar("fn",   FN_ENTER);
+  g_config.backtick_action = prefs.getUChar("bt",   BT_ESC);
+  g_config.num_action      = prefs.getUChar("num",  NUM_CMD_N);
+  prefs.end();
+}
+void saveConfig() {
+  Preferences prefs;
+  prefs.begin("kb", false);
+  prefs.putUChar("ctrl", g_config.ctrl_action);
+  prefs.putUChar("opt",  g_config.opt_action);
+  prefs.putUChar("fn",   g_config.fn_action);
+  prefs.putUChar("bt",   g_config.backtick_action);
+  prefs.putUChar("num",  g_config.num_action);
+  prefs.end();
+}
+bool consumeConfigBootFlag() {
+  Preferences prefs;
+  prefs.begin("kb", false);
+  bool flag = prefs.getBool("cfg_boot", false);
+  if (flag) prefs.putBool("cfg_boot", false);
+  prefs.end();
+  return flag;
+}
+void requestConfigBoot() {
+  Preferences prefs;
+  prefs.begin("kb", false);
+  prefs.putBool("cfg_boot", true);
+  prefs.end();
+}
+
+// 单按动作（press-and-release 时调用）
+void doCtrlTap() {
+  switch (g_config.ctrl_action) {
+    case CTRL_OPT_TAB:
+      bleKeyboard.press(KEY_LEFT_ALT); bleKeyboard.press(KEY_TAB); bleKeyboard.releaseAll();
+      showFlash("Opt+Tab", COL_KEY_FN); break;
+    case CTRL_CMD_SPACE:
+      bleKeyboard.press(KEY_LEFT_GUI); bleKeyboard.press(' '); bleKeyboard.releaseAll();
+      showFlash("Cmd+Spc", COL_KEY_FN); break;
+    case CTRL_CMD_SHIFT_SEMI:
+      bleKeyboard.press(KEY_LEFT_GUI); bleKeyboard.press(KEY_LEFT_SHIFT); bleKeyboard.press(';');
+      bleKeyboard.releaseAll();
+      showFlash("Cmd+Sh+;", COL_KEY_FN); break;
+    case CTRL_NONE: break;
+  }
+}
+void doOptTap() {
+  switch (g_config.opt_action) {
+    case OPT_CAPS_LOCK:
+      capsLocked = !capsLocked;
+      bleKeyboard.write(KEY_CAPS_LOCK);
+      showFlash(capsLocked ? "CAPS ON" : "caps off", TFT_YELLOW); break;
+    case OPT_ESC:
+      bleKeyboard.write(KEY_ESC);
+      showFlash("Esc", COL_KEY_ESC); break;
+    case OPT_NONE: break;
+  }
+}
+void doFnTap() {
+  switch (g_config.fn_action) {
+    case FN_ENTER:
+      bleKeyboard.write(KEY_RETURN); showFlash("Enter", COL_KEY_ENT); break;
+    case FN_TAB:
+      bleKeyboard.write(KEY_TAB); showFlash("Tab", COL_KEY_ENT); break;
+    case FN_ESC:
+      bleKeyboard.write(KEY_ESC); showFlash("Esc", COL_KEY_ESC); break;
+    case FN_NONE: break;
+  }
+}
+void doBacktick() {
+  switch (g_config.backtick_action) {
+    case BT_ESC:
+      bleKeyboard.write(KEY_ESC); showFlash("Esc", COL_KEY_ESC); break;
+    case BT_BACKTICK:
+      bleKeyboard.write('`'); break;
+  }
+}
+void doNumberKey(char c) {  // c in '1'..'8'
+  char msg[12];
+  switch (g_config.num_action) {
+    case NUM_CMD_N:
+      bleKeyboard.press(KEY_LEFT_GUI); bleKeyboard.press(c); bleKeyboard.releaseAll();
+      snprintf(msg, sizeof(msg), "Cmd+%c", c);
+      showFlash(msg, COL_KEY_NUM); break;
+    case NUM_LITERAL:
+      bleKeyboard.write(c); break;
+  }
+}
+
+// AP + 配置网页
+static const char* ctrlNames[] = {"Opt+Tab (语音输入)", "Cmd+Space (Spotlight)", "Cmd+Shift+; (听写)", "(无)"};
+static const char* optNames[]  = {"Caps Lock", "Esc", "(无)"};
+static const char* fnNames[]   = {"Enter", "Tab", "Esc", "(无)"};
+static const char* btNames[]   = {"Esc", "` 反引号"};
+static const char* numNames[]  = {"Cmd+N (Ghostty tab)", "原样数字 1-8"};
+
+String htmlOption(int idx, int curr, const char* label) {
+  String s = "<option value='" + String(idx) + "'";
+  if (idx == curr) s += " selected";
+  s += ">"; s += label; s += "</option>";
+  return s;
+}
+String htmlSelect(const char* name, int curr, const char* opts[], int n) {
+  String s = "<select name='"; s += name; s += "'>";
+  for (int i = 0; i < n; i++) s += htmlOption(i, curr, opts[i]);
+  s += "</select>";
+  return s;
+}
+
+void handleRoot() {
+  String body = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
+  body += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  body += "<title>CardPuter Keyboard Config</title>";
+  body += "<style>body{font-family:system-ui;max-width:500px;margin:1em auto;padding:0 1em}";
+  body += "label{display:block;margin:1em 0 .3em;font-weight:600}";
+  body += "select{width:100%;padding:.5em;font-size:1em}";
+  body += "button{margin-top:1.5em;padding:.7em 1.5em;font-size:1em;width:100%}";
+  body += ".save{background:#2563eb;color:#fff;border:0;border-radius:4px}";
+  body += ".reboot{background:#dc2626;color:#fff;border:0;border-radius:4px;margin-top:.5em}";
+  body += "</style></head><body>";
+  body += "<h2>CardPuter Keyboard 配置</h2>";
+  body += "<form method='POST' action='/save'>";
+  body += "<label>Ctrl 单按</label>" + htmlSelect("ctrl", g_config.ctrl_action, ctrlNames, 4);
+  body += "<label>Opt 单按</label>" + htmlSelect("opt", g_config.opt_action, optNames, 3);
+  body += "<label>Fn 单按</label>" + htmlSelect("fn", g_config.fn_action, fnNames, 4);
+  body += "<label>反引号 (`)</label>" + htmlSelect("bt", g_config.backtick_action, btNames, 2);
+  body += "<label>数字键 1-8</label>" + htmlSelect("num", g_config.num_action, numNames, 2);
+  body += "<button class='save' type='submit'>保存并重启</button>";
+  body += "</form>";
+  body += "<form method='POST' action='/cancel'>";
+  body += "<button class='reboot' type='submit'>放弃 / 直接重启</button>";
+  body += "</form>";
+  body += "</body></html>";
+  g_web->send(200, "text/html; charset=utf-8", body);
+}
+
+void handleSave() {
+  if (g_web->hasArg("ctrl")) g_config.ctrl_action     = g_web->arg("ctrl").toInt();
+  if (g_web->hasArg("opt"))  g_config.opt_action      = g_web->arg("opt").toInt();
+  if (g_web->hasArg("fn"))   g_config.fn_action       = g_web->arg("fn").toInt();
+  if (g_web->hasArg("bt"))   g_config.backtick_action = g_web->arg("bt").toInt();
+  if (g_web->hasArg("num"))  g_config.num_action      = g_web->arg("num").toInt();
+  saveConfig();
+  g_web->send(200, "text/html; charset=utf-8",
+              "<html><body style='font-family:system-ui;text-align:center;margin-top:3em'>"
+              "<h2>已保存，正在重启…</h2></body></html>");
+  delay(500);
+  esp_restart();
+}
+
+void handleCancel() {
+  g_web->send(200, "text/html; charset=utf-8",
+              "<html><body style='font-family:system-ui;text-align:center;margin-top:3em'>"
+              "<h2>正在重启…</h2></body></html>");
+  delay(500);
+  esp_restart();
+}
+
+// ===== 配置模式：STA 连家庭 WiFi（写死，仅试验用）=====
+#include <ESPmDNS.h>
+
+const char* WIFI_SSID = "YOUR_SSID";
+const char* WIFI_PASS = "YOUR_PASSWORD";
+const char* MDNS_NAME = "cardputer-kb";  // 访问 http://cardputer-kb.local
+const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就重启回正常模式
+
+unsigned long g_configEnterTime = 0;
+String g_staIp = "";
+bool g_staConnected = false;
+
+void drawConfigScreen(const char* status, const String& ip) {
+  M5Cardputer.Display.fillScreen(BLACK);
+  M5Cardputer.Display.setTextColor(WHITE, BLACK);
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setCursor(8, 4);
+  M5Cardputer.Display.print("WiFi Config");
+
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setCursor(8, 32);
+  M5Cardputer.Display.print("SSID:   ");
+  M5Cardputer.Display.println(WIFI_SSID);
+  M5Cardputer.Display.setCursor(8, 48);
+  M5Cardputer.Display.print("Status: ");
+  M5Cardputer.Display.println(status);
+  M5Cardputer.Display.setCursor(8, 64);
+  M5Cardputer.Display.print("IP:     ");
+  M5Cardputer.Display.println(ip);
+  M5Cardputer.Display.setCursor(8, 80);
+  M5Cardputer.Display.print("mDNS:   http://");
+  M5Cardputer.Display.print(MDNS_NAME);
+  M5Cardputer.Display.println(".local");
+
+  M5Cardputer.Display.setCursor(8, 110);
+  M5Cardputer.Display.setTextColor(0xFD20, BLACK);
+  M5Cardputer.Display.println("Reboot to exit");
+}
+
+// /api/status — JSON 健康状态
+void handleStatus() {
+  char json[384];
+  int rssi = WiFi.RSSI();
+  unsigned long uptime = millis() / 1000;
+  int bat = M5Cardputer.Power.getBatteryLevel();
+  snprintf(json, sizeof(json),
+    "{\"mode\":\"config\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
+    "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,"
+    "\"cfg\":{\"ctrl\":%u,\"opt\":%u,\"fn\":%u,\"bt\":%u,\"num\":%u},"
+    "\"heap_free\":%u}",
+    WIFI_SSID, g_staIp.c_str(), rssi, MDNS_NAME, uptime, bat,
+    g_config.ctrl_action, g_config.opt_action, g_config.fn_action,
+    g_config.backtick_action, g_config.num_action,
+    (unsigned)ESP.getFreeHeap());
+  g_web->send(200, "application/json", json);
+}
+
+// /api/screenshot — 当前屏幕 BMP（240x135 16bpp → 24bpp BMP）
+void handleScreenshot() {
+  const uint32_t W = 240, H = 135;
+  uint32_t rowSize = (W * 3 + 3) & ~3;  // 720
+  uint32_t imageSize = rowSize * H;
+  uint32_t fileSize = 54 + imageSize;
+  uint8_t header[54] = {
+    'B','M',
+    (uint8_t)fileSize,(uint8_t)(fileSize>>8),(uint8_t)(fileSize>>16),(uint8_t)(fileSize>>24),
+    0,0,0,0, 54,0,0,0, 40,0,0,0,
+    (uint8_t)W,(uint8_t)(W>>8),(uint8_t)(W>>16),(uint8_t)(W>>24),
+    (uint8_t)H,(uint8_t)(H>>8),(uint8_t)(H>>16),(uint8_t)(H>>24),
+    1,0, 24,0, 0,0,0,0,
+    (uint8_t)imageSize,(uint8_t)(imageSize>>8),(uint8_t)(imageSize>>16),(uint8_t)(imageSize>>24),
+    0x13,0x0B,0,0, 0x13,0x0B,0,0, 0,0,0,0, 0,0,0,0
+  };
+  g_web->setContentLength(fileSize);
+  g_web->send(200, "image/bmp", "");
+  WiFiClient client = g_web->client();
+  client.write(header, 54);
+  uint8_t row[720];
+  for (int y = (int)H - 1; y >= 0; y--) {
+    int idx = 0;
+    for (int x = 0; x < (int)W; x++) {
+      uint16_t color = M5Cardputer.Display.readPixel(x, y);
+      uint8_t r = (color >> 11) & 0x1F;
+      uint8_t g = (color >> 5) & 0x3F;
+      uint8_t b = color & 0x1F;
+      r = (r << 3) | (r >> 2);
+      g = (g << 2) | (g >> 4);
+      b = (b << 3) | (b >> 2);
+      row[idx++] = b;
+      row[idx++] = g;
+      row[idx++] = r;
+    }
+    client.write(row, rowSize);
+  }
+}
+
+void setupConfigMode() {
+  Serial.begin(115200);
+  Serial.println("\n[config] entering STA mode");
+  drawConfigScreen("Connecting...", "");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(MDNS_NAME);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_TIMEOUT_MS) {
+    delay(200);
+    Serial.print(".");
+  }
+  Serial.println();
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[config] WiFi failed, reverting to BLE mode");
+    drawConfigScreen("FAILED, reboot", "");
+    delay(2000);
+    esp_restart();
+  }
+
+  g_staConnected = true;
+  g_staIp = WiFi.localIP().toString();
+  Serial.printf("[config] connected, IP=%s\n", g_staIp.c_str());
+
+  if (MDNS.begin(MDNS_NAME)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("[config] mDNS: %s.local\n", MDNS_NAME);
+  }
+
+  g_web = new WebServer(80);
+  g_web->on("/",                HTTP_GET,  handleRoot);
+  g_web->on("/save",            HTTP_POST, handleSave);
+  g_web->on("/cancel",          HTTP_POST, handleCancel);
+  g_web->on("/api/status",      HTTP_GET,  handleStatus);
+  g_web->on("/api/screenshot",  HTTP_GET,  handleScreenshot);
+  g_web->on("/api/reboot",      HTTP_POST, handleCancel);
+  g_web->begin();
+
+  drawConfigScreen("Connected", g_staIp);
+  g_configEnterTime = millis();
+}
+
+void configModeLoop() {
+  if (g_web) g_web->handleClient();
+  // WiFi 掉线后自动重启回正常模式（避免卡死）
+  if (g_staConnected && WiFi.status() != WL_CONNECTED) {
+    delay(3000);
+    if (WiFi.status() != WL_CONNECTED) esp_restart();
+  }
+  delay(2);
+}
+
+#endif  // IS_CARDPUTER
+
+// ============================================================
 //  Setup & Loop — shared
 // ============================================================
 
 void setup() {
 #if IS_CARDPUTER
+  Serial.begin(115200);
+  delay(100);
+  Serial.println("\n[boot] start");
+
   auto cfg = M5.config();
   M5Cardputer.begin(cfg);
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
   M5Cardputer.Display.fillScreen(BLACK);
+  Serial.println("[boot] M5Cardputer ok");
+
+  // 进配置模式标志（防御：失败默认 false，把它放在 BLE 之前是为了节省 BLE 不必要的初始化）
+  bool wantConfig = false;
+  {
+    Preferences p;
+    if (p.begin("kb", false)) {
+      wantConfig = p.getBool("cfg_boot", false);
+      if (wantConfig) p.putBool("cfg_boot", false);
+      p.end();
+    } else {
+      Serial.println("[boot] NVS kb begin failed, normal mode");
+    }
+  }
+  Serial.printf("[boot] cfg_boot=%d\n", (int)wantConfig);
+
+  loadConfig();
+  Serial.println("[boot] config loaded");
+
+  if (wantConfig) {
+    g_config_mode = true;
+    setupConfigMode();
+    return;
+  }
 #else
   M5.begin();
   M5.Axp.ScreenBreath(SCREEN_BRIGHTNESS);
@@ -871,6 +1248,10 @@ void setup() {
 
 void loop() {
 #if IS_CARDPUTER
+  if (g_config_mode) {
+    configModeLoop();
+    return;
+  }
   M5Cardputer.update();
 #else
   M5.update();
@@ -976,27 +1357,30 @@ void loop() {
     bool shiftOn = keys.shift;
 
     // --- Modifier tap-hold: on press, reset "used as modifier" flag ---
-    if (fnNow && !fnPrevHeld)     fnUsedAsModifier = false;
+    if (fnNow && !fnPrevHeld)     { fnUsedAsModifier = false; fnPressStart = millis(); }
     if (ctrlNow && !ctrlPrevHeld) ctrlUsedAsModifier = false;
     if (optNow && !optPrevHeld)   optUsedAsModifier = false;
 
+    // --- Fn 长按 5 秒进入 WiFi 配置模式 ---
+    if (fnNow && !fnUsedAsModifier && fnPressStart > 0
+        && (millis() - fnPressStart >= FN_LONG_PRESS_MS)) {
+      showFlash("Config Mode", TFT_YELLOW);
+      delay(800);
+      requestConfigBoot();
+      esp_restart();
+    }
+
     // --- Modifier tap-hold: on release, fire tap action if not used as modifier ---
     if (!fnNow && fnPrevHeld && !fnUsedAsModifier) {
-      bleKeyboard.write(KEY_RETURN);
-      showFlash("Enter", COL_KEY_ENT);
+      doFnTap();
       screenWake();
     }
     if (!ctrlNow && ctrlPrevHeld && !ctrlUsedAsModifier) {
-      bleKeyboard.press(KEY_LEFT_ALT);
-      bleKeyboard.press(KEY_TAB);
-      bleKeyboard.releaseAll();
-      showFlash("Opt+Tab", COL_KEY_FN);
+      doCtrlTap();
       screenWake();
     }
     if (!optNow && optPrevHeld && !optUsedAsModifier) {
-      capsLocked = !capsLocked;
-      bleKeyboard.write(KEY_CAPS_LOCK);
-      showFlash(capsLocked ? "CAPS ON" : "caps off", TFT_YELLOW);
+      doOptTap();
       screenWake();
     }
     fnPrevHeld   = fnNow;
@@ -1063,18 +1447,11 @@ void loop() {
           // Normal mode (shift already applied by library for characters)
           switch (c) {
             case '1': case '2': case '3': case '4': case '5':
-            case '6': case '7': case '8': {
-              bleKeyboard.press(KEY_LEFT_GUI);
-              bleKeyboard.press(c);
-              bleKeyboard.releaseAll();
-              char msg[8];
-              snprintf(msg, sizeof(msg), "Cmd+%c", c);
-              showFlash(msg, COL_KEY_NUM);
+            case '6': case '7': case '8':
+              doNumberKey(c);
               break;
-            }
             case '`':
-              bleKeyboard.write(KEY_ESC);
-              showFlash("Esc", COL_KEY_ESC);
+              doBacktick();
               break;
             default:
               bleKeyboard.write(c);

@@ -9,7 +9,7 @@ BUILD_DIR_CARD := build/cardputer
 
 FQBN_C      := m5stack:esp32:m5stack_stickc
 FQBN_CP     := m5stack:esp32:m5stack_stickc_plus
-FQBN_CARD   := m5stack:esp32:m5stack_cardputer
+FQBN_CARD   := m5stack:esp32:m5stack_cardputer:PartitionScheme=huge_app
 
 PORT_C      ?= /dev/cu.usbserial-XXXXXXXX
 PORT_CP     ?= /dev/cu.usbserial-XXXXXXXX
