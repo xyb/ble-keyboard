@@ -61,7 +61,42 @@
 #include <esp_mac.h>
 #include <esp_sleep.h>
 
-BleKeyboard bleKeyboard(DEVICE_NAME, "M5Stack", 100);
+// 子类化 BleKeyboard 以监听 host 推送的 LED output report（Caps Lock / NumLock）。
+// 用作"远程进配置模式"触发：短时间内 Caps Lock LED 切换 ≥6 次 → 进配置模式。
+// 6 次对手动操作来说几乎不可能，但 AppleScript 模拟 3 次连按（共 6 次 LED 变化）可触发。
+volatile uint8_t  g_caps_state = 0;
+volatile uint8_t  g_caps_toggle_count = 0;
+volatile unsigned long g_caps_window_start = 0;
+const unsigned long CAPS_TRIGGER_WINDOW_MS = 2000;
+const uint8_t CAPS_TRIGGER_COUNT = 6;
+volatile bool g_remote_trigger_fired = false;
+
+class BleKeyboardWithLed : public BleKeyboard {
+public:
+  BleKeyboardWithLed(std::string n, std::string m, uint8_t b) : BleKeyboard(n, m, b) {}
+  void onWrite(BLECharacteristic* me) override {
+    BleKeyboard::onWrite(me);
+    std::string v = me->getValue();
+    if (v.empty()) return;
+    uint8_t led = (uint8_t)v[0];
+    uint8_t caps_now = (led >> 1) & 1;
+    if (caps_now == g_caps_state) return;
+    g_caps_state = caps_now;
+    unsigned long now = millis();
+    if (now - g_caps_window_start > CAPS_TRIGGER_WINDOW_MS) {
+      g_caps_window_start = now;
+      g_caps_toggle_count = 1;
+    } else {
+      g_caps_toggle_count++;
+      if (g_caps_toggle_count >= CAPS_TRIGGER_COUNT && !g_remote_trigger_fired) {
+        g_remote_trigger_fired = true;
+        // 不能在 BLE 回调里直接 esp_restart，标志位让 loop() 处理
+      }
+    }
+  }
+};
+
+BleKeyboardWithLed bleKeyboard(DEVICE_NAME, "M5Stack", 100);
 char fullDeviceName[32];  // "DeviceName-XXYY" with BLE MAC suffix
 
 bool connected = false;
@@ -1248,6 +1283,17 @@ void setup() {
 
 void loop() {
 #if IS_CARDPUTER
+  // 远程触发：BLE 回调里检测到 host 反复切 Caps Lock 后置标志，main loop 这里执行重启
+  if (g_remote_trigger_fired) {
+    M5Cardputer.Display.fillScreen(BLACK);
+    M5Cardputer.Display.setTextColor(TFT_YELLOW, BLACK);
+    M5Cardputer.Display.setTextSize(2);
+    M5Cardputer.Display.setCursor(8, 50);
+    M5Cardputer.Display.println("Remote Config");
+    delay(800);
+    requestConfigBoot();
+    esp_restart();
+  }
   if (g_config_mode) {
     configModeLoop();
     return;
