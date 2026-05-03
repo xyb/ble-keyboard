@@ -184,8 +184,8 @@ struct KbConfig {
   uint8_t  count;
 };
 
-// 预设 profile：xyb 默认（语音输入工作流）
-const KbConfig PRESET_XYB_DEFAULT = {
+// 预设 profile：LazyTyper + iTerm2（xyb 主力工作流：语音输入 + 终端 tab 切换）
+const KbConfig PRESET_LAZYTYPER = {
   {
     {TK_CTRL_TAP,  0,  0, 1, 0, 0, AK_TAB},        // Ctrl→Opt+Tab（macOS 听写）
     {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
@@ -214,17 +214,17 @@ const KbConfig PRESET_GHOSTTY = {
   5
 };
 
-const KbConfig& DEFAULT_PRESET = PRESET_XYB_DEFAULT;
+const KbConfig& DEFAULT_PRESET = PRESET_LAZYTYPER;
 
 struct PresetEntry { const char* name; const KbConfig* cfg; };
 const PresetEntry PRESETS[] = {
-  {"xyb 默认（语音输入）",  &PRESET_XYB_DEFAULT},
+  {"LazyTyper + iTerm2",  &PRESET_LAZYTYPER},
   {"纯透传（无映射）",      &PRESET_PASSTHROUGH},
   {"Ghostty 重度（终端）",  &PRESET_GHOSTTY},
 };
 constexpr int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
-KbConfig g_config = PRESET_XYB_DEFAULT;
+KbConfig g_config = PRESET_LAZYTYPER;
 
 bool g_config_mode = false;
 WebServer* g_web = nullptr;
@@ -1006,7 +1006,7 @@ void loadConfig() {
       bindingUnpack(buf + 1 + i * BIND_BYTES, g_config.bindings[i]);
     }
   } else {
-    g_config = PRESET_XYB_DEFAULT;
+    g_config = PRESET_LAZYTYPER;
   }
   g_wifiSsid = prefs.getString("ssid", "");
   g_wifiPass = prefs.getString("pass", "");
@@ -1407,7 +1407,13 @@ const char JS_CODE[] =
 "const el=document.getElementById('wifi-list');el.textContent='扫描中…';"
 "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();"
 "if(!nets.length){el.textContent='没找到 WiFi';return}"
-"el.innerHTML=nets.map(n=>`<a href='#' onclick=\"document.getElementById('ssid').value='${n.ssid.replace(/'/g,\\\"\\\\'\\\")}';document.getElementById('pass').focus();return false\">${n.ssid} <span style='color:#888'>(${n.rssi}dBm${n.enc?' 🔒':''})</span></a>`).join('')"
+"el.innerHTML='';"
+"for(const n of nets){"
+"const a=document.createElement('a');a.href='#';"
+"a.textContent=n.ssid+' ('+n.rssi+'dBm'+(n.enc?' 🔒':'')+')';"
+"a.onclick=(e)=>{e.preventDefault();document.getElementById('ssid').value=n.ssid;document.getElementById('pass').focus();};"
+"el.appendChild(a);"
+"}"
 "}catch(e){el.textContent='扫描失败：'+e}"
 "}"
 "init();";
@@ -1435,24 +1441,6 @@ void handleRoot() {
   body += ".banner{padding:.7em 1em;border-radius:6px;margin-bottom:1em;font-size:.95em}";
   body += ".banner-sta{background:#dcfce7;color:#166534;border:1px solid #86efac}";
   body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
-  body += "</style></head><body>";
-  body += "<h2>CardPuter Keyboard 配置</h2>";
-
-  // 顶部状态横幅
-  if (g_apMode) {
-    body += "<div class='banner banner-ap'>当前 <b>AP 模式</b>（你正连着设备的 AP）。在下面填家庭 WiFi 的 SSID 和密码并保存，设备会重启切到 STA 模式连家庭 WiFi。届时本 AP 会消失，要换回你日常用的 WiFi，再用 <code>http://";
-    body += MDNS_NAME;
-    body += ".local</code> 找设备。</div>";
-  } else {
-    body += "<div class='banner banner-sta'>当前 <b>STA 模式</b>，已连 <b>";
-    body += g_wifiSsid;
-    body += "</b>（IP <code>";
-    body += g_staIp;
-    body += "</code>，RSSI ";
-    body += String(WiFi.RSSI());
-    body += " dBm）。</div>";
-  }
-
   body += ".bind-wrap{margin-top:.5em}";
   body += ".bind-row{display:grid;grid-template-columns:1fr auto auto auto auto auto auto;gap:.4em;align-items:center;padding:.4em 0;border-bottom:1px solid #eee}";
   body += ".bind-row label{margin:0;font-size:.85em;font-weight:400;text-align:center}";
@@ -1466,8 +1454,8 @@ void handleRoot() {
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
 
-  // 顶部状态横幅
-  body += "[BANNER]";  // 占位，下面按模式替换
+  // 顶部状态横幅占位（下方 body.replace 填入）
+  body += "[BANNER]";
 
   body += "<fieldset><legend>预设方案（一键载入到下方表单）</legend>";
   body += "<select id='preset' onchange='loadPreset(this.value)'>";
@@ -1538,7 +1526,14 @@ void handleRoot() {
   body += "{g:'符号',o:[";
   for (uint8_t a = AK_BACKTICK; a <= AK_SLASH; a++) {
     if (a > AK_BACKTICK) body += ",";
-    body += "[" + String(a) + ",'" + akName(a) + "']";
+    // 用 JSON 风格双引号字符串 + 转义，反斜杠/单引号才不会破 JS
+    const char* nm = akName(a);
+    String esc;
+    for (const char* p = nm; *p; p++) {
+      if (*p == '\\' || *p == '"') esc += '\\';
+      esc += *p;
+    }
+    body += "[" + String(a) + ",\"" + esc + "\"]";
   }
   body += "]}];";
 
