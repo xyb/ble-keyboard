@@ -61,6 +61,10 @@
 #include <esp_mac.h>
 #include <esp_sleep.h>
 
+// 全局前置声明：让 Arduino 自动生成的函数原型能看到这些类型
+// （ModTapState 实际定义在 #if IS_CARDPUTER 块里，但 auto-decl 在文件顶部）
+struct ModTapState;
+
 // 子类化 BleKeyboard 以监听 host 推送的 LED output report（Caps Lock / NumLock）。
 // 用作"远程进配置模式"触发：短时间内 Caps Lock LED 切换 ≥6 次 → 进配置模式。
 // 6 次对手动操作来说几乎不可能，但 AppleScript 模拟 3 次连按（共 6 次 LED 变化）可触发。
@@ -156,25 +160,39 @@ enum AK : uint8_t {
   AK_SEMICOLON, AK_QUOTE, AK_COMMA, AK_PERIOD, AK_SLASH,
 };
 
-// 触发类型
+// 触发类型（之前 TK_*_TAP 现在统一改成 TK_CTRL/OPT/FN，事件类型走 event 字段）
 enum TriggerKind : uint8_t {
   TK_NONE = 0,
-  TK_CTRL_TAP,    // Ctrl 单按
-  TK_OPT_TAP,     // Opt 单按
-  TK_FN_TAP,      // Fn 单按
+  TK_CTRL,
+  TK_OPT,
+  TK_FN,
   TK_KEY,         // 一个具体字符键（trigger_key 字段记录字符）
+};
+
+// 触发事件：单击 / 双击 / 三击 / 长按
+enum TriggerEvent : uint8_t {
+  TEV_SINGLE = 0,
+  TEV_DOUBLE,
+  TEV_TRIPLE,
+  TEV_LONG,
 };
 
 // 单条 binding
 struct Binding {
   uint8_t trigger;       // TriggerKind
   uint8_t trigger_key;   // TK_KEY 时使用，存 ASCII 字符（如 '`' / 'j'）
+  uint8_t event;         // TriggerEvent
+  uint16_t long_ms;      // TEV_LONG 时长按门槛，默认 500
   uint8_t cmd;
   uint8_t opt;
   uint8_t ctrl;
   uint8_t shift;
   uint8_t action;        // AK 枚举
 };
+
+// 多击/长按检测时间窗口
+constexpr unsigned long TAP_WINDOW_MS = 280;
+constexpr unsigned long LONG_PRESS_DEFAULT_MS = 500;
 
 constexpr int MAX_BINDINGS = 16;
 
@@ -184,21 +202,21 @@ struct KbConfig {
 };
 
 // 预设 profile：LazyTyper + iTerm2（xyb 主力——语音输入 + iTerm2 tab 切换）
-// 完整 13 条 binding，初始 NVS 空时直接可用。
+// 12 条 binding 全部默认单击事件。
 const KbConfig PRESET_LAZYTYPER = {
   {
-    {TK_CTRL_TAP,  0,  0, 1, 0, 0, AK_TAB},        // Ctrl→Opt+Tab（LazyTyper 听写）
-    {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
-    {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
-    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
-    {TK_KEY,      '1', 1, 0, 0, 0, AK_1},          // 1→Cmd+1（iTerm2 tab 1）
-    {TK_KEY,      '2', 1, 0, 0, 0, AK_2},
-    {TK_KEY,      '3', 1, 0, 0, 0, AK_3},
-    {TK_KEY,      '4', 1, 0, 0, 0, AK_4},
-    {TK_KEY,      '5', 1, 0, 0, 0, AK_5},
-    {TK_KEY,      '6', 1, 0, 0, 0, AK_6},
-    {TK_KEY,      '7', 1, 0, 0, 0, AK_7},
-    {TK_KEY,      '8', 1, 0, 0, 0, AK_8},
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 1, 0, 0, AK_TAB},        // Ctrl 单击→Opt+Tab（LazyTyper 听写）
+    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt 单击→CapsLock
+    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},      // Fn 单击→Enter
+    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},        // `→Esc
+    {TK_KEY,  '1', TEV_SINGLE, 0,  1, 0, 0, 0, AK_1},          // 1→Cmd+1（iTerm2 tab 1）
+    {TK_KEY,  '2', TEV_SINGLE, 0,  1, 0, 0, 0, AK_2},
+    {TK_KEY,  '3', TEV_SINGLE, 0,  1, 0, 0, 0, AK_3},
+    {TK_KEY,  '4', TEV_SINGLE, 0,  1, 0, 0, 0, AK_4},
+    {TK_KEY,  '5', TEV_SINGLE, 0,  1, 0, 0, 0, AK_5},
+    {TK_KEY,  '6', TEV_SINGLE, 0,  1, 0, 0, 0, AK_6},
+    {TK_KEY,  '7', TEV_SINGLE, 0,  1, 0, 0, 0, AK_7},
+    {TK_KEY,  '8', TEV_SINGLE, 0,  1, 0, 0, 0, AK_8},
   },
   12
 };
@@ -207,21 +225,21 @@ const KbConfig PRESET_LAZYTYPER = {
 // 数字键如果用户已配置就保留（merge 加载，不会抹掉）。
 const KbConfig PRESET_WISPRFLOW = {
   {
-    {TK_CTRL_TAP,  0,  1, 0, 0, 1, AK_SEMICOLON},  // Ctrl→Cmd+Shift+;（macOS 听写默认热键，Wispr 也常用）
-    {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
-    {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
-    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  1, 0, 0, 1, AK_SEMICOLON},  // Ctrl 单击→Cmd+Shift+;
+    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},
+    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},
+    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},
   },
   4
 };
 
-// 预设 profile：GhostType（AI 输入助手）。只重映射 modifier+backtick。
+// 预设 profile：GhostType（AI 输入助手）
 const KbConfig PRESET_GHOSTTYPE = {
   {
-    {TK_CTRL_TAP,  0,  1, 1, 0, 0, AK_G},          // Ctrl→Cmd+Opt+G（GhostType 触发占位，按需调）
-    {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
-    {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
-    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  1, 1, 0, 0, AK_G},          // Ctrl 单击→Cmd+Opt+G（占位）
+    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},
+    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},
+    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},
   },
   4
 };
@@ -1000,17 +1018,24 @@ bool g_staConnected = false;
 bool g_apMode = false;
 char g_apSsidStr[32] = {0};
 
-// 单条 binding 序列化为 7 字节（用字面值，避免 Arduino 自动 forward decl 看不到 constexpr）
-#define BIND_BYTES 7
+// 单条 binding 序列化为 10 字节
+#define BIND_BYTES 10
 static void bindingPack(uint8_t* out, const Binding& b) {
-  out[0] = b.trigger; out[1] = b.trigger_key;
-  out[2] = b.cmd; out[3] = b.opt; out[4] = b.ctrl; out[5] = b.shift;
-  out[6] = b.action;
+  out[0] = b.trigger;
+  out[1] = b.trigger_key;
+  out[2] = b.event;
+  out[3] = (uint8_t)(b.long_ms & 0xFF);
+  out[4] = (uint8_t)((b.long_ms >> 8) & 0xFF);
+  out[5] = b.cmd; out[6] = b.opt; out[7] = b.ctrl; out[8] = b.shift;
+  out[9] = b.action;
 }
 static void bindingUnpack(const uint8_t* in, Binding& b) {
-  b.trigger = in[0]; b.trigger_key = in[1];
-  b.cmd = in[2] ? 1 : 0; b.opt = in[3] ? 1 : 0; b.ctrl = in[4] ? 1 : 0; b.shift = in[5] ? 1 : 0;
-  b.action = in[6];
+  b.trigger     = in[0];
+  b.trigger_key = in[1];
+  b.event       = in[2];
+  b.long_ms     = (uint16_t)in[3] | ((uint16_t)in[4] << 8);
+  b.cmd = in[5] ? 1 : 0; b.opt = in[6] ? 1 : 0; b.ctrl = in[7] ? 1 : 0; b.shift = in[8] ? 1 : 0;
+  b.action = in[9];
 }
 
 void loadConfig() {
@@ -1206,28 +1231,112 @@ static void executeBinding(const Binding& b, uint16_t flashColor) {
   showFlash(label, flashColor);
 }
 
-// 在 g_config.bindings 里查找指定 trigger 的 binding（找到第一个）
-static const Binding* findBinding(uint8_t trigger, uint8_t trigger_key = 0) {
+// 在 g_config.bindings 里查找指定 trigger + event 的 binding
+static const Binding* findBinding(uint8_t trigger, uint8_t event, uint8_t trigger_key = 0) {
   for (int i = 0; i < g_config.count; i++) {
     const Binding& b = g_config.bindings[i];
     if (b.trigger != trigger) continue;
+    if (b.event != event) continue;
     if (trigger == TK_KEY && b.trigger_key != trigger_key) continue;
     return &b;
   }
   return nullptr;
 }
 
-void doCtrlTap() {
-  const Binding* b = findBinding(TK_CTRL_TAP);
-  if (b) executeBinding(*b, COL_KEY_FN);
+// 一个 trigger 是否定义了 SINGLE 之外的事件（双击/三击/长按）——决定单击是否要等 tap window
+static bool hasMultiTap(uint8_t trigger, uint8_t trigger_key = 0) {
+  for (int i = 0; i < g_config.count; i++) {
+    const Binding& b = g_config.bindings[i];
+    if (b.trigger != trigger) continue;
+    if (trigger == TK_KEY && b.trigger_key != trigger_key) continue;
+    if (b.event == TEV_DOUBLE || b.event == TEV_TRIPLE) return true;
+  }
+  return false;
 }
-void doOptTap() {
-  const Binding* b = findBinding(TK_OPT_TAP);
-  if (b) executeBinding(*b, TFT_YELLOW);
+static bool hasLongPress(uint8_t trigger, uint8_t trigger_key = 0) {
+  for (int i = 0; i < g_config.count; i++) {
+    const Binding& b = g_config.bindings[i];
+    if (b.trigger != trigger) continue;
+    if (trigger == TK_KEY && b.trigger_key != trigger_key) continue;
+    if (b.event == TEV_LONG) return true;
+  }
+  return false;
 }
-void doFnTap() {
-  const Binding* b = findBinding(TK_FN_TAP);
-  if (b) executeBinding(*b, COL_KEY_ENT);
+// 取该 trigger 第一个 LONG binding 的 long_ms（决定按多少 ms 触发）
+static uint16_t getLongMs(uint8_t trigger, uint8_t trigger_key = 0) {
+  for (int i = 0; i < g_config.count; i++) {
+    const Binding& b = g_config.bindings[i];
+    if (b.trigger != trigger) continue;
+    if (trigger == TK_KEY && b.trigger_key != trigger_key) continue;
+    if (b.event == TEV_LONG) return b.long_ms ? b.long_ms : LONG_PRESS_DEFAULT_MS;
+  }
+  return LONG_PRESS_DEFAULT_MS;
+}
+
+// 多击/长按状态：每个 modifier 一份
+struct ModTapState {
+  unsigned long press_start = 0;
+  unsigned long last_release = 0;
+  uint8_t tap_count = 0;
+  bool long_fired = false;
+};
+ModTapState ctrlState, optState, fnState;
+
+static uint8_t tapCountToEvent(uint8_t n) {
+  if (n >= 3) return TEV_TRIPLE;
+  if (n == 2) return TEV_DOUBLE;
+  return TEV_SINGLE;
+}
+
+// modifier 按下时调（前一帧未按、当前帧按）
+static void onModPress(ModTapState* sp, unsigned long now) {
+  sp->press_start = now;
+  sp->long_fired = false;
+  if (sp->last_release > 0 && now - sp->last_release < TAP_WINDOW_MS) {
+    sp->tap_count++;
+  } else {
+    sp->tap_count = 1;
+  }
+}
+
+// modifier 释放时调（前一帧按、当前帧未按）
+static void onModRelease(ModTapState* sp, unsigned long now,
+                         bool usedAsModifier, uint8_t trigger, uint16_t color) {
+  if (usedAsModifier || sp->long_fired) {
+    sp->tap_count = 0;
+    sp->last_release = 0;
+    return;
+  }
+  sp->last_release = now;
+  if (!hasMultiTap(trigger)) {
+    const Binding* b = findBinding(trigger, TEV_SINGLE);
+    if (b) executeBinding(*b, color);
+    sp->tap_count = 0;
+    sp->last_release = 0;
+  }
+}
+
+static void pollMod(ModTapState* sp, uint8_t trigger, uint16_t color, bool held) {
+  unsigned long now = millis();
+  if (held && !sp->long_fired && sp->press_start > 0 && hasLongPress(trigger)) {
+    uint16_t lms = getLongMs(trigger);
+    if (now - sp->press_start >= lms) {
+      const Binding* b = findBinding(trigger, TEV_LONG);
+      if (b) {
+        executeBinding(*b, color);
+        sp->long_fired = true;
+        sp->tap_count = 0;
+      }
+    }
+  }
+  if (!held && sp->tap_count > 0 && sp->last_release > 0 &&
+      (now - sp->last_release >= TAP_WINDOW_MS)) {
+    uint8_t ev = tapCountToEvent(sp->tap_count);
+    const Binding* b = findBinding(trigger, ev);
+    if (b) executeBinding(*b, color);
+    sp->tap_count = 0;
+    sp->last_release = 0;
+  }
 }
 // 任意字符键的处理（normal mode 没有别的 layer 干预时）
 // 返回 true = 已被某 binding 消费；false = 走默认字面透传
@@ -1297,12 +1406,14 @@ static String htmlAkSelect(const char* name, uint8_t curr) {
 // 把 binding 序列化成 JSON 对象（用于 GET /api/config 和 GET /api/presets）
 static int bindingJsonInto(char* buf, int n, const Binding& b) {
   return snprintf(buf, n,
-    "{\"trigger\":%u,\"key\":%u,\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u}",
-    b.trigger, b.trigger_key, b.cmd, b.opt, b.ctrl, b.shift, b.action);
+    "{\"trigger\":%u,\"key\":%u,\"event\":%u,\"long_ms\":%u,"
+    "\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u}",
+    b.trigger, b.trigger_key, b.event, b.long_ms,
+    b.cmd, b.opt, b.ctrl, b.shift, b.action);
 }
 static String configJson(const KbConfig& c) {
   String s = "[";
-  char buf[128];
+  char buf[256];
   for (int i = 0; i < c.count; i++) {
     if (i > 0) s += ",";
     bindingJsonInto(buf, sizeof(buf), c.bindings[i]);
@@ -1334,16 +1445,28 @@ const char JS_CODE[] =
 "const inp=sel.parentElement.querySelector('.b-key');"
 "inp.style.display=sel.value=='4'?'inline':'none';"
 "}"
+"function eventSelectHtml(curr,longMs){"
+"let h=\"<select class='b-event' onchange='eventChanged(this)'>\";"
+"for(const v in EVENTS) h+=`<option value='${v}' ${v==curr?'selected':''}>${EVENTS[v]}</option>`;"
+"h+=\"</select>\";"
+"h+=`<input type='number' class='b-longms' min='100' max='5000' step='50' value='${longMs||500}' style='display:${curr==3?'inline':'none'}' title='长按毫秒'>`;"
+"return h;"
+"}"
+"function eventChanged(sel){"
+"const inp=sel.parentElement.querySelector('.b-longms');"
+"inp.style.display=sel.value=='3'?'inline':'none';"
+"}"
 "function rowHtml(b){"
-"b=b||{trigger:1,key:0,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
+"b=b||{trigger:1,key:0,event:0,long_ms:500,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
 "return `<tr class='bind-row'>"
 "<td><div class='trig-cell'>${trigSelectHtml(b.trigger,b.key)}</div></td>"
+"<td class='col-event'><div class='event-cell'>${eventSelectHtml(b.event,b.long_ms)}</div></td>"
 "<td class='col-mod'><input type='checkbox' class='b-cmd' ${b.cmd?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-opt' ${b.opt?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-ctrl' ${b.ctrl?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-shift' ${b.shift?'checked':''}></td>"
 "<td class='col-act'>${akSelectHtml(b.action)}</td>"
-"<td class='col-del'><button type='button' class='del' title='删除这条映射' onclick='this.closest(\"tr\").remove()'>🗑</button></td>"
+"<td class='col-del'><button type='button' class='del' title='删除这条映射' onclick='this.closest(\"tr\").remove()'>×</button></td>"
 "</tr>`;"
 "}"
 "function addRow(b){"
@@ -1360,10 +1483,14 @@ const char JS_CODE[] =
 "for(const r of rows){"
 "const trig=parseInt(r.querySelector('.b-trig').value);"
 "const keyInp=r.querySelector('.b-key');"
+"const ev=parseInt(r.querySelector('.b-event').value);"
+"const longInp=r.querySelector('.b-longms');"
 "const ka=r.querySelector('.b-act');"
 "out.push({"
 "trigger:trig,"
 "key:trig==4?(keyInp.value.charCodeAt(0)||0):0,"
+"event:ev,"
+"long_ms:ev==3?(parseInt(longInp.value)||500):0,"
 "cmd:r.querySelector('.b-cmd').checked?1:0,"
 "opt:r.querySelector('.b-opt').checked?1:0,"
 "ctrl:r.querySelector('.b-ctrl').checked?1:0,"
@@ -1373,7 +1500,7 @@ const char JS_CODE[] =
 "}"
 "return out;"
 "}"
-"function bindingKey(b){return b.trigger==4?(b.trigger+':'+b.key):String(b.trigger);}"
+"function bindingKey(b){const t=b.trigger==4?(b.trigger+':'+b.key):String(b.trigger);return t+'/'+(b.event||0);}"
 "function mergeBindings(existing,incoming){"
 "const map=new Map(existing.map(b=>[bindingKey(b),b]));"
 "for(const b of incoming) map.set(bindingKey(b),b);"
@@ -1461,16 +1588,20 @@ void handleRoot() {
   body += "table.bind-table th:first-child{text-align:left}";
   body += "table.bind-table td{padding:.4em .2em;border-bottom:1px solid #eee;text-align:center;vertical-align:middle}";
   body += "table.bind-table td:first-child{text-align:left}";
-  body += "table.bind-table th.col-mod,table.bind-table td.col-mod{width:2.6em}";
-  body += "table.bind-table th.col-act,table.bind-table td.col-act{width:9em}";
-  body += "table.bind-table th.col-del,table.bind-table td.col-del{width:2.4em}";
+  body += "table.bind-table th.col-event,table.bind-table td.col-event{width:7.5em}";
+  body += "table.bind-table th.col-mod,table.bind-table td.col-mod{width:2.4em}";
+  body += "table.bind-table th.col-act,table.bind-table td.col-act{width:8.5em}";
+  body += "table.bind-table th.col-del,table.bind-table td.col-del{width:2em}";
+  body += "table.bind-table .event-cell{display:flex;gap:.2em;align-items:center}";
+  body += "table.bind-table .event-cell select{flex:1;min-width:0}";
+  body += "table.bind-table .event-cell input.b-longms{width:3.5em;flex-shrink:0;display:none}";
   body += "table.bind-table input[type=checkbox]{transform:scale(1.2);margin:0}";
   body += "table.bind-table select,table.bind-table input[type=text]{font-size:.9em;padding:.3em;width:100%;box-sizing:border-box}";
   body += "table.bind-table .trig-cell{display:flex;gap:.3em;align-items:center}";
   body += "table.bind-table .trig-cell select{flex:1;min-width:0}";
   body += "table.bind-table .trig-cell input.b-key{width:2.5em;flex-shrink:0}";
-  body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:.2em;font-size:1.1em;line-height:1}";
-  body += "table.bind-table .del:hover{background:#fee;border-radius:4px}";
+  body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:0;font-size:1.4em;line-height:1;color:#999;width:1.6em;height:1.6em;display:inline-flex;align-items:center;justify-content:center;border-radius:50%}";
+  body += "table.bind-table .del:hover{background:#fee;color:#c00}";
   body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
@@ -1497,7 +1628,8 @@ void handleRoot() {
 
   body += "<fieldset><legend>键映射（每行 = 一条触发→动作）</legend>";
   body += "<table class='bind-table'><thead><tr>";
-  body += "<th>触发</th>";
+  body += "<th>触发键</th>";
+  body += "<th class='col-event'>事件</th>";
   body += "<th class='col-mod'>Cmd</th><th class='col-mod'>Opt</th><th class='col-mod'>Ctrl</th><th class='col-mod'>Shift</th>";
   body += "<th class='col-act'>主键</th>";
   body += "<th class='col-del'></th>";
@@ -1561,7 +1693,8 @@ void handleRoot() {
   }
   body += "]}];";
 
-  body += "const TRIGGERS={1:'Ctrl 单按',2:'Opt 单按',3:'Fn 单按',4:'特定键'};";
+  body += "const TRIGGERS={1:'Ctrl',2:'Opt',3:'Fn',4:'特定键'};";
+  body += "const EVENTS={0:'单击',1:'双击',2:'三击',3:'长按'};";
 
   // 渲染一行 binding（addRow 调用，row 是 binding 对象）
   body += JS_CODE;
@@ -1630,6 +1763,8 @@ void handleSave() {
     Binding& b = g_config.bindings[count];
     b.trigger     = jsonFindInt(obj, "trigger", 0);
     b.trigger_key = jsonFindInt(obj, "key", 0);
+    b.event       = jsonFindInt(obj, "event", TEV_SINGLE);
+    b.long_ms     = jsonFindInt(obj, "long_ms", LONG_PRESS_DEFAULT_MS);
     b.cmd         = jsonFindInt(obj, "cmd", 0)   ? 1 : 0;
     b.opt         = jsonFindInt(obj, "opt", 0)   ? 1 : 0;
     b.ctrl        = jsonFindInt(obj, "ctrl", 0)  ? 1 : 0;
@@ -2096,6 +2231,14 @@ void loop() {
   // CardPuter keyboard input
   if (!connected) { delay(100); return; }
 
+  // 每帧轮询 modifier 多击/长按状态（即使 keyState 没变也要触发 tap window 结束动作）
+  {
+    auto& _ks = M5Cardputer.Keyboard.keysState();
+    pollMod(&ctrlState, TK_CTRL, COL_KEY_FN,  _ks.ctrl);
+    pollMod(&optState,  TK_OPT,  TFT_YELLOW,  _ks.opt);
+    pollMod(&fnState,   TK_FN,   COL_KEY_ENT, _ks.fn);
+  }
+
   if (M5Cardputer.Keyboard.isChange()) {
     // Any key activity wakes the screen
     if (M5Cardputer.Keyboard.isPressed()) screenWake();
@@ -2106,31 +2249,32 @@ void loop() {
     bool optNow  = keys.opt;
     bool shiftOn = keys.shift;
 
-    // --- Modifier tap-hold: on press, reset "used as modifier" flag ---
-    if (fnNow && !fnPrevHeld)     { fnUsedAsModifier = false; fnPressStart = millis(); }
-    if (ctrlNow && !ctrlPrevHeld) ctrlUsedAsModifier = false;
-    if (optNow && !optPrevHeld)   optUsedAsModifier = false;
+    // --- Modifier 按下边沿：reset usedAsModifier + 调 onModPress ---
+    unsigned long _now = millis();
+    if (fnNow && !fnPrevHeld)     { fnUsedAsModifier = false; fnPressStart = _now; onModPress(&fnState, _now); }
+    if (ctrlNow && !ctrlPrevHeld) { ctrlUsedAsModifier = false; onModPress(&ctrlState, _now); }
+    if (optNow && !optPrevHeld)   { optUsedAsModifier = false; onModPress(&optState, _now); }
 
-    // --- Fn 长按 5 秒进入 WiFi 配置模式 ---
+    // --- Fn 长按 5 秒进入 WiFi 配置模式（独立路径，优先于 binding 长按）---
     if (fnNow && !fnUsedAsModifier && fnPressStart > 0
-        && (millis() - fnPressStart >= FN_LONG_PRESS_MS)) {
+        && (_now - fnPressStart >= FN_LONG_PRESS_MS)) {
       showFlash("Config Mode", TFT_YELLOW);
       delay(800);
       requestConfigBoot();
       esp_restart();
     }
 
-    // --- Modifier tap-hold: on release, fire tap action if not used as modifier ---
-    if (!fnNow && fnPrevHeld && !fnUsedAsModifier) {
-      doFnTap();
+    // --- Modifier 释放边沿：调 onModRelease ---
+    if (!fnNow && fnPrevHeld) {
+      onModRelease(&fnState, _now, fnUsedAsModifier, TK_FN, COL_KEY_ENT);
       screenWake();
     }
-    if (!ctrlNow && ctrlPrevHeld && !ctrlUsedAsModifier) {
-      doCtrlTap();
+    if (!ctrlNow && ctrlPrevHeld) {
+      onModRelease(&ctrlState, _now, ctrlUsedAsModifier, TK_CTRL, COL_KEY_FN);
       screenWake();
     }
-    if (!optNow && optPrevHeld && !optUsedAsModifier) {
-      doOptTap();
+    if (!optNow && optPrevHeld) {
+      onModRelease(&optState, _now, optUsedAsModifier, TK_OPT, TFT_YELLOW);
       screenWake();
     }
     fnPrevHeld   = fnNow;
