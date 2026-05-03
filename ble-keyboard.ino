@@ -141,13 +141,24 @@ enum BacktickAction { BT_ESC=0, BT_BACKTICK=1 };
 enum NumAction { NUM_CMD_N=0, NUM_LITERAL=1 };
 
 struct KbConfig {
-  uint8_t ctrl_action     = CTRL_OPT_TAB;
-  uint8_t opt_action      = OPT_CAPS_LOCK;
-  uint8_t fn_action       = FN_ENTER;
-  uint8_t backtick_action = BT_ESC;
-  uint8_t num_action      = NUM_CMD_N;
+  uint8_t ctrl_action;
+  uint8_t opt_action;
+  uint8_t fn_action;
+  uint8_t backtick_action;
+  uint8_t num_action;
 };
-KbConfig g_config;
+
+// 默认 preset：xyb 当前用法（语音输入工作流）。新扩展的配置项按此 preset 默认值添加，
+// loadConfig 找不到 NVS 值时 fallback 到 preset 对应字段。改 preset 不会影响已 NVS 的用户。
+const KbConfig DEFAULT_PRESET = {
+  /* ctrl_action     */ CTRL_OPT_TAB,       // Ctrl 单按 → Opt+Tab（macOS 听写）
+  /* opt_action      */ OPT_CAPS_LOCK,      // Opt 单按 → Caps Lock 切换
+  /* fn_action       */ FN_ENTER,           // Fn 单按 → Enter
+  /* backtick_action */ BT_ESC,             // ` 键 → Esc
+  /* num_action      */ NUM_CMD_N,          // 数字 1-8 → Cmd+N（Ghostty tab）
+};
+
+KbConfig g_config = DEFAULT_PRESET;
 
 bool g_config_mode = false;
 WebServer* g_web = nullptr;
@@ -895,15 +906,23 @@ void flashBtnA() {
 // WiFi config 模式相关全局（提前到 loadConfig 之前，避免编译顺序问题）
 String g_wifiSsid = "";
 String g_wifiPass = "";
+const char* MDNS_NAME = "cardputer-kb";  // 访问 http://cardputer-kb.local
+const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就 fallback 到 AP
+unsigned long g_configEnterTime = 0;
+String g_staIp = "";
+String g_apIp = "";
+bool g_staConnected = false;
+bool g_apMode = false;
+char g_apSsidStr[32] = {0};
 
 void loadConfig() {
   Preferences prefs;
   prefs.begin("kb", true);
-  g_config.ctrl_action     = prefs.getUChar("ctrl", CTRL_OPT_TAB);
-  g_config.opt_action      = prefs.getUChar("opt",  OPT_CAPS_LOCK);
-  g_config.fn_action       = prefs.getUChar("fn",   FN_ENTER);
-  g_config.backtick_action = prefs.getUChar("bt",   BT_ESC);
-  g_config.num_action      = prefs.getUChar("num",  NUM_CMD_N);
+  g_config.ctrl_action     = prefs.getUChar("ctrl", DEFAULT_PRESET.ctrl_action);
+  g_config.opt_action      = prefs.getUChar("opt",  DEFAULT_PRESET.opt_action);
+  g_config.fn_action       = prefs.getUChar("fn",   DEFAULT_PRESET.fn_action);
+  g_config.backtick_action = prefs.getUChar("bt",   DEFAULT_PRESET.backtick_action);
+  g_config.num_action      = prefs.getUChar("num",  DEFAULT_PRESET.num_action);
   g_wifiSsid               = prefs.getString("ssid", "");
   g_wifiPass               = prefs.getString("pass", "");
   prefs.end();
@@ -1041,8 +1060,26 @@ void handleRoot() {
   body += "legend{font-weight:600;padding:0 .5em}";
   body += "#wifi-list{margin-top:.5em;font-size:.9em}";
   body += "#wifi-list a{display:block;padding:.4em;color:#2563eb;text-decoration:none;border-bottom:1px solid #eee}";
+  body += ".banner{padding:.7em 1em;border-radius:6px;margin-bottom:1em;font-size:.95em}";
+  body += ".banner-sta{background:#dcfce7;color:#166534;border:1px solid #86efac}";
+  body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
+
+  // 顶部状态横幅
+  if (g_apMode) {
+    body += "<div class='banner banner-ap'>当前 <b>AP 模式</b>（你正连着设备的 AP）。在下面填家庭 WiFi 的 SSID 和密码并保存，设备会重启切到 STA 模式连家庭 WiFi。届时本 AP 会消失，要换回你日常用的 WiFi，再用 <code>http://";
+    body += MDNS_NAME;
+    body += ".local</code> 找设备。</div>";
+  } else {
+    body += "<div class='banner banner-sta'>当前 <b>STA 模式</b>，已连 <b>";
+    body += g_wifiSsid;
+    body += "</b>（IP <code>";
+    body += g_staIp;
+    body += "</code>，RSSI ";
+    body += String(WiFi.RSSI());
+    body += " dBm）。</div>";
+  }
 
   body += "<form method='POST' action='/save'>";
 
@@ -1128,16 +1165,7 @@ void handleCancel() {
 // ===== 配置模式：STA 连家庭 WiFi（写死，仅试验用）=====
 #include <ESPmDNS.h>
 
-const char* MDNS_NAME = "cardputer-kb";  // 访问 http://cardputer-kb.local
-const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就 fallback 到 AP
-
-unsigned long g_configEnterTime = 0;
-String g_staIp = "";
-String g_apIp = "";
-bool g_staConnected = false;
-bool g_apMode = false;
-char g_apSsidStr[32] = {0};
-// g_wifiSsid / g_wifiPass declared earlier (before loadConfig)
+// 这些全局在 loadConfig 之前已声明（forward 顺序需要）
 
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
