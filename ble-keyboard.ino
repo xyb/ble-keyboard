@@ -163,7 +163,6 @@ enum TriggerKind : uint8_t {
   TK_OPT_TAP,     // Opt 单按
   TK_FN_TAP,      // Fn 单按
   TK_KEY,         // 一个具体字符键（trigger_key 字段记录字符）
-  TK_NUM_RANGE,   // 数字 1-8 批量（action 忽略，发"修饰键 + 触发的数字"）
 };
 
 // 单条 binding
@@ -174,7 +173,7 @@ struct Binding {
   uint8_t opt;
   uint8_t ctrl;
   uint8_t shift;
-  uint8_t action;        // AK 枚举（TK_NUM_RANGE 时忽略）
+  uint8_t action;        // AK 枚举
 };
 
 constexpr int MAX_BINDINGS = 16;
@@ -184,16 +183,47 @@ struct KbConfig {
   uint8_t  count;
 };
 
-// 预设 profile：LazyTyper + iTerm2（xyb 主力工作流：语音输入 + 终端 tab 切换）
+// 预设 profile：LazyTyper + iTerm2（xyb 主力——语音输入 + iTerm2 tab 切换）
+// 完整 13 条 binding，初始 NVS 空时直接可用。
 const KbConfig PRESET_LAZYTYPER = {
   {
-    {TK_CTRL_TAP,  0,  0, 1, 0, 0, AK_TAB},        // Ctrl→Opt+Tab（macOS 听写）
+    {TK_CTRL_TAP,  0,  0, 1, 0, 0, AK_TAB},        // Ctrl→Opt+Tab（LazyTyper 听写）
     {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
     {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
     {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
-    {TK_NUM_RANGE, 0,  1, 0, 0, 0, AK_NONE},       // 数字 1-8→Cmd+digit
+    {TK_KEY,      '1', 1, 0, 0, 0, AK_1},          // 1→Cmd+1（iTerm2 tab 1）
+    {TK_KEY,      '2', 1, 0, 0, 0, AK_2},
+    {TK_KEY,      '3', 1, 0, 0, 0, AK_3},
+    {TK_KEY,      '4', 1, 0, 0, 0, AK_4},
+    {TK_KEY,      '5', 1, 0, 0, 0, AK_5},
+    {TK_KEY,      '6', 1, 0, 0, 0, AK_6},
+    {TK_KEY,      '7', 1, 0, 0, 0, AK_7},
+    {TK_KEY,      '8', 1, 0, 0, 0, AK_8},
   },
-  5
+  12
+};
+
+// 预设 profile：Wispr Flow（语音输入 app）。只重映射 modifier+backtick，
+// 数字键如果用户已配置就保留（merge 加载，不会抹掉）。
+const KbConfig PRESET_WISPRFLOW = {
+  {
+    {TK_CTRL_TAP,  0,  1, 0, 0, 1, AK_SEMICOLON},  // Ctrl→Cmd+Shift+;（macOS 听写默认热键，Wispr 也常用）
+    {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
+    {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
+    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
+  },
+  4
+};
+
+// 预设 profile：GhostType（AI 输入助手）。只重映射 modifier+backtick。
+const KbConfig PRESET_GHOSTTYPE = {
+  {
+    {TK_CTRL_TAP,  0,  1, 1, 0, 0, AK_G},          // Ctrl→Cmd+Opt+G（GhostType 触发占位，按需调）
+    {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
+    {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
+    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
+  },
+  4
 };
 
 // 预设 profile：纯透传（所有键直接发字面字符，无映射）
@@ -202,25 +232,14 @@ const KbConfig PRESET_PASSTHROUGH = {
   0
 };
 
-// 预设 profile：Ghostty 重度（终端工作流）
-const KbConfig PRESET_GHOSTTY = {
-  {
-    {TK_CTRL_TAP,  0,  1, 0, 0, 0, AK_T},          // Ctrl→Cmd+T（新 tab）
-    {TK_OPT_TAP,   0,  1, 0, 0, 0, AK_W},          // Opt→Cmd+W（关 tab）
-    {TK_FN_TAP,    0,  1, 0, 0, 0, AK_K},          // Fn→Cmd+K（清屏）
-    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
-    {TK_NUM_RANGE, 0,  1, 0, 0, 0, AK_NONE},       // 1-8→Cmd+digit（切 tab）
-  },
-  5
-};
-
 const KbConfig& DEFAULT_PRESET = PRESET_LAZYTYPER;
 
 struct PresetEntry { const char* name; const KbConfig* cfg; };
 const PresetEntry PRESETS[] = {
   {"LazyTyper + iTerm2",  &PRESET_LAZYTYPER},
+  {"Wispr Flow",          &PRESET_WISPRFLOW},
+  {"GhostType",           &PRESET_GHOSTTYPE},
   {"纯透传（无映射）",      &PRESET_PASSTHROUGH},
-  {"Ghostty 重度（终端）",  &PRESET_GHOSTTY},
 };
 constexpr int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -1187,21 +1206,6 @@ static void executeBinding(const Binding& b, uint16_t flashColor) {
   showFlash(label, flashColor);
 }
 
-// 数字范围 binding：modifiers + 触发的数字字符
-static void executeNumBinding(const Binding& b, char digit) {
-  if (b.cmd)   bleKeyboard.press(KEY_LEFT_GUI);
-  if (b.opt)   bleKeyboard.press(KEY_LEFT_ALT);
-  if (b.ctrl)  bleKeyboard.press(KEY_LEFT_CTRL);
-  if (b.shift) bleKeyboard.press(KEY_LEFT_SHIFT);
-  bleKeyboard.press(digit);
-  bleKeyboard.releaseAll();
-
-  char label[16];
-  char keyStr[2] = {digit, 0};
-  formatBindingLabel(label, sizeof(label), b.cmd, b.opt, b.ctrl, b.shift, keyStr);
-  showFlash(label, COL_KEY_NUM);
-}
-
 // 在 g_config.bindings 里查找指定 trigger 的 binding（找到第一个）
 static const Binding* findBinding(uint8_t trigger, uint8_t trigger_key = 0) {
   for (int i = 0; i < g_config.count; i++) {
@@ -1225,18 +1229,13 @@ void doFnTap() {
   const Binding* b = findBinding(TK_FN_TAP);
   if (b) executeBinding(*b, COL_KEY_ENT);
 }
-// 任意字符键的处理（在 normal mode 没有别的 layer 干预时）
-// 返回 true = 已被某 binding 消费；false = 应该走默认透传
+// 任意字符键的处理（normal mode 没有别的 layer 干预时）
+// 返回 true = 已被某 binding 消费；false = 走默认字面透传
 bool dispatchKeyTap(char c) {
-  // 数字 1-8：先看是否有 num_range binding；找到就走它
-  if (c >= '1' && c <= '8') {
-    const Binding* nb = findBinding(TK_NUM_RANGE);
-    if (nb) { executeNumBinding(*nb, c); return true; }
-  }
-  // 普通按键：找 TK_KEY 类型 + trigger_key 匹配
   const Binding* b = findBinding(TK_KEY, (uint8_t)c);
   if (b) {
-    uint16_t color = (c == '`') ? COL_KEY_ESC : COL_KEY_NUM;
+    uint16_t color = (c == '`') ? COL_KEY_ESC :
+                     (c >= '0' && c <= '9') ? COL_KEY_NUM : COL_KEY_NUM;
     executeBinding(*b, color);
     return true;
   }
@@ -1337,22 +1336,21 @@ const char JS_CODE[] =
 "}"
 "function rowHtml(b){"
 "b=b||{trigger:1,key:0,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
-"const isNum=b.trigger==5;"
-"return `<div class='bind-row'>"
-"<div class='trig'>${trigSelectHtml(b.trigger,b.key)}</div>"
-"<input type='checkbox' class='b-cmd' ${b.cmd?'checked':''}>"
-"<input type='checkbox' class='b-opt' ${b.opt?'checked':''}>"
-"<input type='checkbox' class='b-ctrl' ${b.ctrl?'checked':''}>"
-"<input type='checkbox' class='b-shift' ${b.shift?'checked':''}>"
-"${isNum?\"<i style='font-size:.85em'>= 触发数字</i>\":akSelectHtml(b.action)}"
-"<button type='button' class='del' onclick='this.closest(\".bind-row\").remove()'>删</button>"
-"</div>`;"
+"return `<tr class='bind-row'>"
+"<td><div class='trig-cell'>${trigSelectHtml(b.trigger,b.key)}</div></td>"
+"<td class='col-mod'><input type='checkbox' class='b-cmd' ${b.cmd?'checked':''}></td>"
+"<td class='col-mod'><input type='checkbox' class='b-opt' ${b.opt?'checked':''}></td>"
+"<td class='col-mod'><input type='checkbox' class='b-ctrl' ${b.ctrl?'checked':''}></td>"
+"<td class='col-mod'><input type='checkbox' class='b-shift' ${b.shift?'checked':''}></td>"
+"<td class='col-act'>${akSelectHtml(b.action)}</td>"
+"<td class='col-del'><button type='button' class='del' title='删除这条映射' onclick='this.closest(\"tr\").remove()'>🗑</button></td>"
+"</tr>`;"
 "}"
 "function addRow(b){"
-"const wrap=document.getElementById('binds');"
-"const tmp=document.createElement('div');"
+"const tbody=document.getElementById('binds');"
+"const tmp=document.createElement('tbody');"
 "tmp.innerHTML=rowHtml(b);"
-"wrap.appendChild(tmp.firstElementChild);"
+"tbody.appendChild(tmp.firstElementChild);"
 "}"
 "function clearRows(){document.getElementById('binds').innerHTML=\"\"}"
 "function loadBindings(arr){clearRows();arr.forEach(addRow)}"
@@ -1375,11 +1373,21 @@ const char JS_CODE[] =
 "}"
 "return out;"
 "}"
+"function bindingKey(b){return b.trigger==4?(b.trigger+':'+b.key):String(b.trigger);}"
+"function mergeBindings(existing,incoming){"
+"const map=new Map(existing.map(b=>[bindingKey(b),b]));"
+"for(const b of incoming) map.set(bindingKey(b),b);"
+"return [...map.values()];"
+"}"
 "async function loadPreset(name){"
 "if(!name)return;"
 "const r=await fetch('/api/presets');const presets=await r.json();"
 "const p=presets.find(x=>x.name===name);"
-"if(p)loadBindings(p.bindings);"
+"if(!p)return;"
+"if(p.bindings.length===0){clearRows();return;}"
+// 合并：preset 定义的 trigger 覆盖现有，未定义的保留
+"const merged=mergeBindings(collectBindings(),p.bindings);"
+"loadBindings(merged);"
 "}"
 "async function init(){"
 "const r=await fetch('/api/config');const cfg=await r.json();"
@@ -1408,9 +1416,15 @@ const char JS_CODE[] =
 "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();"
 "if(!nets.length){el.textContent='没找到 WiFi';return}"
 "el.innerHTML='';"
+"const bars=(r)=>{const lvl=r>=-50?4:r>=-60?3:r>=-70?2:r>=-80?1:0;return '▰'.repeat(lvl)+'▱'.repeat(4-lvl);};"
+"const barColor=(r)=>r>=-60?'#10b981':r>=-75?'#f59e0b':'#dc2626';"
 "for(const n of nets){"
 "const a=document.createElement('a');a.href='#';"
-"a.textContent=n.ssid+' ('+n.rssi+'dBm'+(n.enc?' 🔒':'')+')';"
+"a.style.display='flex';a.style.alignItems='center';a.style.gap='.5em';"
+"const ssidSpan=document.createElement('span');ssidSpan.textContent=n.ssid+(n.enc?' 🔒':'');ssidSpan.style.flex='1';"
+"const barSpan=document.createElement('span');barSpan.textContent=bars(n.rssi);barSpan.style.color=barColor(n.rssi);barSpan.style.fontFamily='monospace';barSpan.style.letterSpacing='-1px';"
+"const dbmSpan=document.createElement('span');dbmSpan.textContent=n.rssi+'dBm';dbmSpan.style.color='#888';dbmSpan.style.fontSize='.85em';dbmSpan.style.minWidth='4em';dbmSpan.style.textAlign='right';"
+"a.appendChild(ssidSpan);a.appendChild(barSpan);a.appendChild(dbmSpan);"
 "a.onclick=(e)=>{e.preventDefault();document.getElementById('ssid').value=n.ssid;document.getElementById('pass').focus();};"
 "el.appendChild(a);"
 "}"
@@ -1441,15 +1455,22 @@ void handleRoot() {
   body += ".banner{padding:.7em 1em;border-radius:6px;margin-bottom:1em;font-size:.95em}";
   body += ".banner-sta{background:#dcfce7;color:#166534;border:1px solid #86efac}";
   body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
-  body += ".bind-wrap{margin-top:.5em}";
-  body += ".bind-row{display:grid;grid-template-columns:1fr auto auto auto auto auto auto;gap:.4em;align-items:center;padding:.4em 0;border-bottom:1px solid #eee}";
-  body += ".bind-row label{margin:0;font-size:.85em;font-weight:400;text-align:center}";
-  body += ".bind-row input[type=checkbox]{transform:scale(1.2)}";
-  body += ".bind-row select,.bind-row input[type=text]{font-size:.9em;padding:.3em}";
-  body += ".bind-row .trig{display:flex;gap:.3em;align-items:center}";
-  body += ".bind-row .trig select{min-width:6em}";
-  body += ".bind-row .trig input{width:3em}";
-  body += ".bind-row .del{background:#fee;color:#c00;border:1px solid #fcc;border-radius:4px;cursor:pointer;padding:.3em .6em;font-size:.85em}";
+  // 用 <table> 让 header 和 row 列宽自动对齐
+  body += "table.bind-table{width:100%;border-collapse:collapse;margin-top:.5em}";
+  body += "table.bind-table th{font-size:.8em;color:#666;font-weight:600;padding:.4em .2em;border-bottom:1px solid #ccc;text-align:center}";
+  body += "table.bind-table th:first-child{text-align:left}";
+  body += "table.bind-table td{padding:.4em .2em;border-bottom:1px solid #eee;text-align:center;vertical-align:middle}";
+  body += "table.bind-table td:first-child{text-align:left}";
+  body += "table.bind-table th.col-mod,table.bind-table td.col-mod{width:2.6em}";
+  body += "table.bind-table th.col-act,table.bind-table td.col-act{width:9em}";
+  body += "table.bind-table th.col-del,table.bind-table td.col-del{width:2.4em}";
+  body += "table.bind-table input[type=checkbox]{transform:scale(1.2);margin:0}";
+  body += "table.bind-table select,table.bind-table input[type=text]{font-size:.9em;padding:.3em;width:100%;box-sizing:border-box}";
+  body += "table.bind-table .trig-cell{display:flex;gap:.3em;align-items:center}";
+  body += "table.bind-table .trig-cell select{flex:1;min-width:0}";
+  body += "table.bind-table .trig-cell input.b-key{width:2.5em;flex-shrink:0}";
+  body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:.2em;font-size:1.1em;line-height:1}";
+  body += "table.bind-table .del:hover{background:#fee;border-radius:4px}";
   body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
@@ -1475,9 +1496,12 @@ void handleRoot() {
   body += "</fieldset>";
 
   body += "<fieldset><legend>键映射（每行 = 一条触发→动作）</legend>";
-  body += "<div class='bind-header' style='display:grid;grid-template-columns:1fr auto auto auto auto auto auto;gap:.4em;font-size:.8em;color:#666;padding-bottom:.4em;border-bottom:1px solid #ccc'>";
-  body += "<div>触发</div><div>Cmd</div><div>Opt</div><div>Ctrl</div><div>Shift</div><div>主键</div><div></div></div>";
-  body += "<div id='binds' class='bind-wrap'></div>";
+  body += "<table class='bind-table'><thead><tr>";
+  body += "<th>触发</th>";
+  body += "<th class='col-mod'>Cmd</th><th class='col-mod'>Opt</th><th class='col-mod'>Ctrl</th><th class='col-mod'>Shift</th>";
+  body += "<th class='col-act'>主键</th>";
+  body += "<th class='col-del'></th>";
+  body += "</tr></thead><tbody id='binds'></tbody></table>";
   body += "<button type='button' class='add-btn' onclick='addRow()'>+ 增加映射</button>";
   body += "</fieldset>";
 
@@ -1537,7 +1561,7 @@ void handleRoot() {
   }
   body += "]}];";
 
-  body += "const TRIGGERS={1:'Ctrl 单按',2:'Opt 单按',3:'Fn 单按',4:'特定键',5:'数字 1-8'};";
+  body += "const TRIGGERS={1:'Ctrl 单按',2:'Opt 单按',3:'Fn 单按',4:'特定键'};";
 
   // 渲染一行 binding（addRow 调用，row 是 binding 对象）
   body += JS_CODE;
