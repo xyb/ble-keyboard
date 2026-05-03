@@ -134,28 +134,60 @@ const int SCREEN_BRIGHTNESS = 80;
 #include <WebServer.h>
 #include <Preferences.h>
 
-enum CtrlAction { CTRL_OPT_TAB=0, CTRL_CMD_SPACE=1, CTRL_CMD_SHIFT_SEMI=2, CTRL_NONE=3 };
-enum OptAction  { OPT_CAPS_LOCK=0, OPT_ESC=1, OPT_NONE=2 };
-enum FnAction   { FN_ENTER=0, FN_TAB=1, FN_ESC=2, FN_NONE=3 };
-enum BacktickAction { BT_ESC=0, BT_BACKTICK=1 };
-enum NumAction { NUM_CMD_N=0, NUM_LITERAL=1 };
-
-struct KbConfig {
-  uint8_t ctrl_action;
-  uint8_t opt_action;
-  uint8_t fn_action;
-  uint8_t backtick_action;
-  uint8_t num_action;
+// AK = ActionKey 枚举：一个 binding 的"主键"。0 = 不发任何键
+enum AK : uint8_t {
+  AK_NONE = 0,
+  // 特殊键
+  AK_ENTER, AK_TAB, AK_ESC, AK_BACKSPACE, AK_DELETE, AK_SPACE,
+  AK_UP, AK_DOWN, AK_LEFT, AK_RIGHT,
+  AK_PAGE_UP, AK_PAGE_DOWN, AK_HOME, AK_END,
+  AK_CAPS_LOCK,
+  // 功能键
+  AK_F1, AK_F2, AK_F3, AK_F4, AK_F5, AK_F6,
+  AK_F7, AK_F8, AK_F9, AK_F10, AK_F11, AK_F12,
+  // 字母 a-z
+  AK_A, AK_B, AK_C, AK_D, AK_E, AK_F, AK_G, AK_H, AK_I, AK_J,
+  AK_K, AK_L, AK_M, AK_N, AK_O, AK_P, AK_Q, AK_R, AK_S, AK_T,
+  AK_U, AK_V, AK_W, AK_X, AK_Y, AK_Z,
+  // 数字 0-9
+  AK_0, AK_1, AK_2, AK_3, AK_4, AK_5, AK_6, AK_7, AK_8, AK_9,
+  // 常见符号
+  AK_BACKTICK, AK_MINUS, AK_EQUAL, AK_LBRACKET, AK_RBRACKET, AK_BACKSLASH,
+  AK_SEMICOLON, AK_QUOTE, AK_COMMA, AK_PERIOD, AK_SLASH,
 };
 
-// 默认 preset：xyb 当前用法（语音输入工作流）。新扩展的配置项按此 preset 默认值添加，
-// loadConfig 找不到 NVS 值时 fallback 到 preset 对应字段。改 preset 不会影响已 NVS 的用户。
+// 一个完整的 binding：4 个修饰位 + 一个主键
+struct ActionBinding {
+  uint8_t cmd;
+  uint8_t opt;
+  uint8_t ctrl;
+  uint8_t shift;
+  uint8_t action;  // AK 枚举
+};
+
+// 数字键 binding：只有修饰位，主键 = 当前按下的数字字符
+struct ModifierBinding {
+  uint8_t cmd;
+  uint8_t opt;
+  uint8_t ctrl;
+  uint8_t shift;
+};
+
+struct KbConfig {
+  ActionBinding   ctrl_tap;
+  ActionBinding   opt_tap;
+  ActionBinding   fn_tap;
+  ActionBinding   backtick;
+  ModifierBinding num_keys;
+};
+
+// 默认 preset：xyb 当前用法（语音输入工作流）
 const KbConfig DEFAULT_PRESET = {
-  /* ctrl_action     */ CTRL_OPT_TAB,       // Ctrl 单按 → Opt+Tab（macOS 听写）
-  /* opt_action      */ OPT_CAPS_LOCK,      // Opt 单按 → Caps Lock 切换
-  /* fn_action       */ FN_ENTER,           // Fn 单按 → Enter
-  /* backtick_action */ BT_ESC,             // ` 键 → Esc
-  /* num_action      */ NUM_CMD_N,          // 数字 1-8 → Cmd+N（Ghostty tab）
+  /* ctrl_tap  */ {0, 1, 0, 0, AK_TAB},        // Opt+Tab → macOS 听写
+  /* opt_tap   */ {0, 0, 0, 0, AK_CAPS_LOCK},  // Caps Lock 切换
+  /* fn_tap    */ {0, 0, 0, 0, AK_ENTER},      // Enter
+  /* backtick  */ {0, 0, 0, 0, AK_ESC},        // Esc
+  /* num_keys  */ {1, 0, 0, 0},                // Cmd+digit → Ghostty tab
 };
 
 KbConfig g_config = DEFAULT_PRESET;
@@ -915,16 +947,50 @@ bool g_staConnected = false;
 bool g_apMode = false;
 char g_apSsidStr[32] = {0};
 
+// ActionBinding 序列化为 5 字节 blob
+static void abPack(uint8_t out[5], const ActionBinding& b) {
+  out[0] = b.cmd; out[1] = b.opt; out[2] = b.ctrl; out[3] = b.shift; out[4] = b.action;
+}
+static void abUnpack(const uint8_t in[5], ActionBinding& b) {
+  b.cmd = in[0] ? 1 : 0; b.opt = in[1] ? 1 : 0; b.ctrl = in[2] ? 1 : 0;
+  b.shift = in[3] ? 1 : 0; b.action = in[4];
+}
+static void mbPack(uint8_t out[4], const ModifierBinding& b) {
+  out[0] = b.cmd; out[1] = b.opt; out[2] = b.ctrl; out[3] = b.shift;
+}
+static void mbUnpack(const uint8_t in[4], ModifierBinding& b) {
+  b.cmd = in[0] ? 1 : 0; b.opt = in[1] ? 1 : 0; b.ctrl = in[2] ? 1 : 0; b.shift = in[3] ? 1 : 0;
+}
+
+static void loadBinding(Preferences& p, const char* key, ActionBinding& dst, const ActionBinding& def) {
+  uint8_t buf[5];
+  size_t n = p.getBytes(key, buf, 5);
+  if (n == 5) abUnpack(buf, dst); else dst = def;
+}
+static void saveBinding(Preferences& p, const char* key, const ActionBinding& b) {
+  uint8_t buf[5]; abPack(buf, b);
+  p.putBytes(key, buf, 5);
+}
+static void loadModBinding(Preferences& p, const char* key, ModifierBinding& dst, const ModifierBinding& def) {
+  uint8_t buf[4];
+  size_t n = p.getBytes(key, buf, 4);
+  if (n == 4) mbUnpack(buf, dst); else dst = def;
+}
+static void saveModBinding(Preferences& p, const char* key, const ModifierBinding& b) {
+  uint8_t buf[4]; mbPack(buf, b);
+  p.putBytes(key, buf, 4);
+}
+
 void loadConfig() {
   Preferences prefs;
   prefs.begin("kb", true);
-  g_config.ctrl_action     = prefs.getUChar("ctrl", DEFAULT_PRESET.ctrl_action);
-  g_config.opt_action      = prefs.getUChar("opt",  DEFAULT_PRESET.opt_action);
-  g_config.fn_action       = prefs.getUChar("fn",   DEFAULT_PRESET.fn_action);
-  g_config.backtick_action = prefs.getUChar("bt",   DEFAULT_PRESET.backtick_action);
-  g_config.num_action      = prefs.getUChar("num",  DEFAULT_PRESET.num_action);
-  g_wifiSsid               = prefs.getString("ssid", "");
-  g_wifiPass               = prefs.getString("pass", "");
+  loadBinding   (prefs, "ctrl_b", g_config.ctrl_tap, DEFAULT_PRESET.ctrl_tap);
+  loadBinding   (prefs, "opt_b",  g_config.opt_tap,  DEFAULT_PRESET.opt_tap);
+  loadBinding   (prefs, "fn_b",   g_config.fn_tap,   DEFAULT_PRESET.fn_tap);
+  loadBinding   (prefs, "bt_b",   g_config.backtick, DEFAULT_PRESET.backtick);
+  loadModBinding(prefs, "num_b",  g_config.num_keys, DEFAULT_PRESET.num_keys);
+  g_wifiSsid = prefs.getString("ssid", "");
+  g_wifiPass = prefs.getString("pass", "");
   prefs.end();
   // ⚠️ 开发期默认值：NVS 空时 fallback 到家里的 WiFi。push 前要改成空字符串。
   if (g_wifiSsid.length() == 0) {
@@ -935,11 +1001,11 @@ void loadConfig() {
 void saveConfig() {
   Preferences prefs;
   prefs.begin("kb", false);
-  prefs.putUChar("ctrl", g_config.ctrl_action);
-  prefs.putUChar("opt",  g_config.opt_action);
-  prefs.putUChar("fn",   g_config.fn_action);
-  prefs.putUChar("bt",   g_config.backtick_action);
-  prefs.putUChar("num",  g_config.num_action);
+  saveBinding   (prefs, "ctrl_b", g_config.ctrl_tap);
+  saveBinding   (prefs, "opt_b",  g_config.opt_tap);
+  saveBinding   (prefs, "fn_b",   g_config.fn_tap);
+  saveBinding   (prefs, "bt_b",   g_config.backtick);
+  saveModBinding(prefs, "num_b",  g_config.num_keys);
   prefs.end();
 }
 void saveWifi(const String& ssid, const String& pass) {
@@ -966,82 +1032,244 @@ void requestConfigBoot() {
   prefs.end();
 }
 
-// 单按动作（press-and-release 时调用）
-void doCtrlTap() {
-  switch (g_config.ctrl_action) {
-    case CTRL_OPT_TAB:
-      bleKeyboard.press(KEY_LEFT_ALT); bleKeyboard.press(KEY_TAB); bleKeyboard.releaseAll();
-      showFlash("Opt+Tab", COL_KEY_FN); break;
-    case CTRL_CMD_SPACE:
-      bleKeyboard.press(KEY_LEFT_GUI); bleKeyboard.press(' '); bleKeyboard.releaseAll();
-      showFlash("Cmd+Spc", COL_KEY_FN); break;
-    case CTRL_CMD_SHIFT_SEMI:
-      bleKeyboard.press(KEY_LEFT_GUI); bleKeyboard.press(KEY_LEFT_SHIFT); bleKeyboard.press(';');
-      bleKeyboard.releaseAll();
-      showFlash("Cmd+Sh+;", COL_KEY_FN); break;
-    case CTRL_NONE: break;
+// AK 枚举 → BleKeyboard library 的 HID 键值（非 char 的，return 0 = 字面字符走另外路径）
+// 返回值：高位 0x80 = 字面字符（低 7 位是 ASCII），其它 = HID 键值
+static uint16_t akToKey(uint8_t a) {
+  switch (a) {
+    case AK_ENTER:     return KEY_RETURN;
+    case AK_TAB:       return KEY_TAB;
+    case AK_ESC:       return KEY_ESC;
+    case AK_BACKSPACE: return KEY_BACKSPACE;
+    case AK_DELETE:    return KEY_DELETE;
+    case AK_SPACE:     return 0x80 | ' ';
+    case AK_UP:        return KEY_UP_ARROW;
+    case AK_DOWN:      return KEY_DOWN_ARROW;
+    case AK_LEFT:      return KEY_LEFT_ARROW;
+    case AK_RIGHT:     return KEY_RIGHT_ARROW;
+    case AK_PAGE_UP:   return KEY_PAGE_UP;
+    case AK_PAGE_DOWN: return KEY_PAGE_DOWN;
+    case AK_HOME:      return KEY_HOME;
+    case AK_END:       return KEY_END;
+    case AK_CAPS_LOCK: return KEY_CAPS_LOCK;
+    case AK_F1:  return KEY_F1;  case AK_F2:  return KEY_F2;
+    case AK_F3:  return KEY_F3;  case AK_F4:  return KEY_F4;
+    case AK_F5:  return KEY_F5;  case AK_F6:  return KEY_F6;
+    case AK_F7:  return KEY_F7;  case AK_F8:  return KEY_F8;
+    case AK_F9:  return KEY_F9;  case AK_F10: return KEY_F10;
+    case AK_F11: return KEY_F11; case AK_F12: return KEY_F12;
+    default: break;
   }
-}
-void doOptTap() {
-  switch (g_config.opt_action) {
-    case OPT_CAPS_LOCK:
-      capsLocked = !capsLocked;
-      bleKeyboard.write(KEY_CAPS_LOCK);
-      showFlash(capsLocked ? "CAPS ON" : "caps off", TFT_YELLOW); break;
-    case OPT_ESC:
-      bleKeyboard.write(KEY_ESC);
-      showFlash("Esc", COL_KEY_ESC); break;
-    case OPT_NONE: break;
+  // 字母 a-z
+  if (a >= AK_A && a <= AK_Z) return 0x80 | ('a' + (a - AK_A));
+  // 数字 0-9
+  if (a >= AK_0 && a <= AK_9) return 0x80 | ('0' + (a - AK_0));
+  // 符号
+  switch (a) {
+    case AK_BACKTICK:  return 0x80 | '`';
+    case AK_MINUS:     return 0x80 | '-';
+    case AK_EQUAL:     return 0x80 | '=';
+    case AK_LBRACKET:  return 0x80 | '[';
+    case AK_RBRACKET:  return 0x80 | ']';
+    case AK_BACKSLASH: return 0x80 | '\\';
+    case AK_SEMICOLON: return 0x80 | ';';
+    case AK_QUOTE:     return 0x80 | '\'';
+    case AK_COMMA:     return 0x80 | ',';
+    case AK_PERIOD:    return 0x80 | '.';
+    case AK_SLASH:     return 0x80 | '/';
   }
-}
-void doFnTap() {
-  switch (g_config.fn_action) {
-    case FN_ENTER:
-      bleKeyboard.write(KEY_RETURN); showFlash("Enter", COL_KEY_ENT); break;
-    case FN_TAB:
-      bleKeyboard.write(KEY_TAB); showFlash("Tab", COL_KEY_ENT); break;
-    case FN_ESC:
-      bleKeyboard.write(KEY_ESC); showFlash("Esc", COL_KEY_ESC); break;
-    case FN_NONE: break;
-  }
-}
-void doBacktick() {
-  switch (g_config.backtick_action) {
-    case BT_ESC:
-      bleKeyboard.write(KEY_ESC); showFlash("Esc", COL_KEY_ESC); break;
-    case BT_BACKTICK:
-      bleKeyboard.write('`'); break;
-  }
-}
-void doNumberKey(char c) {  // c in '1'..'8'
-  char msg[12];
-  switch (g_config.num_action) {
-    case NUM_CMD_N:
-      bleKeyboard.press(KEY_LEFT_GUI); bleKeyboard.press(c); bleKeyboard.releaseAll();
-      snprintf(msg, sizeof(msg), "Cmd+%c", c);
-      showFlash(msg, COL_KEY_NUM); break;
-    case NUM_LITERAL:
-      bleKeyboard.write(c); break;
-  }
+  return 0;
 }
 
-// AP + 配置网页
-static const char* ctrlNames[] = {"Opt+Tab (语音输入)", "Cmd+Space (Spotlight)", "Cmd+Shift+; (听写)", "(无)"};
-static const char* optNames[]  = {"Caps Lock", "Esc", "(无)"};
-static const char* fnNames[]   = {"Enter", "Tab", "Esc", "(无)"};
-static const char* btNames[]   = {"Esc", "` 反引号"};
-static const char* numNames[]  = {"Cmd+N (Ghostty tab)", "原样数字 1-8"};
+// 显示用的 binding 标签（"Cmd+Tab"、"Esc" 等），写入 buf
+static void formatBindingLabel(char* buf, size_t n,
+                               uint8_t cmd, uint8_t opt, uint8_t ctrl, uint8_t shift,
+                               const char* keyName) {
+  buf[0] = 0;
+  size_t off = 0;
+  if (cmd && off < n - 5)   { strcpy(buf + off, "Cmd+");   off += 4; }
+  if (opt && off < n - 5)   { strcpy(buf + off, "Opt+");   off += 4; }
+  if (ctrl && off < n - 6)  { strcpy(buf + off, "Ctrl+");  off += 5; }
+  if (shift && off < n - 7) { strcpy(buf + off, "Shift+"); off += 6; }
+  strncpy(buf + off, keyName, n - off - 1);
+  buf[n - 1] = 0;
+}
 
-String htmlOption(int idx, int curr, const char* label) {
-  String s = "<option value='" + String(idx) + "'";
-  if (idx == curr) s += " selected";
-  s += ">"; s += label; s += "</option>";
+static const char* akName(uint8_t a) {
+  switch (a) {
+    case AK_NONE:      return "(无)";
+    case AK_ENTER:     return "Enter";
+    case AK_TAB:       return "Tab";
+    case AK_ESC:       return "Esc";
+    case AK_BACKSPACE: return "Backspace";
+    case AK_DELETE:    return "Delete";
+    case AK_SPACE:     return "Space";
+    case AK_UP:        return "↑";
+    case AK_DOWN:      return "↓";
+    case AK_LEFT:      return "←";
+    case AK_RIGHT:     return "→";
+    case AK_PAGE_UP:   return "PgUp";
+    case AK_PAGE_DOWN: return "PgDn";
+    case AK_HOME:      return "Home";
+    case AK_END:       return "End";
+    case AK_CAPS_LOCK: return "CapsLock";
+  }
+  if (a >= AK_F1 && a <= AK_F12) {
+    static char f[4]; snprintf(f, sizeof(f), "F%d", a - AK_F1 + 1); return f;
+  }
+  if (a >= AK_A && a <= AK_Z) {
+    static char ch[2]; ch[0] = 'a' + (a - AK_A); ch[1] = 0; return ch;
+  }
+  if (a >= AK_0 && a <= AK_9) {
+    static char ch[2]; ch[0] = '0' + (a - AK_0); ch[1] = 0; return ch;
+  }
+  switch (a) {
+    case AK_BACKTICK:  return "`";
+    case AK_MINUS:     return "-";
+    case AK_EQUAL:     return "=";
+    case AK_LBRACKET:  return "[";
+    case AK_RBRACKET:  return "]";
+    case AK_BACKSLASH: return "\\";
+    case AK_SEMICOLON: return ";";
+    case AK_QUOTE:     return "'";
+    case AK_COMMA:     return ",";
+    case AK_PERIOD:    return ".";
+    case AK_SLASH:     return "/";
+  }
+  return "?";
+}
+
+// 通用执行器：按 binding 发出按键序列
+static void executeBinding(const ActionBinding& b, uint16_t flashColor) {
+  if (b.action == AK_NONE && !b.cmd && !b.opt && !b.ctrl && !b.shift) return;
+
+  // 特殊：CapsLock 切换需要更新 capsLocked 状态
+  if (b.action == AK_CAPS_LOCK && !b.cmd && !b.opt && !b.ctrl && !b.shift) {
+    capsLocked = !capsLocked;
+    bleKeyboard.write(KEY_CAPS_LOCK);
+    showFlash(capsLocked ? "CAPS ON" : "caps off", TFT_YELLOW);
+    return;
+  }
+
+  if (b.cmd)   bleKeyboard.press(KEY_LEFT_GUI);
+  if (b.opt)   bleKeyboard.press(KEY_LEFT_ALT);
+  if (b.ctrl)  bleKeyboard.press(KEY_LEFT_CTRL);
+  if (b.shift) bleKeyboard.press(KEY_LEFT_SHIFT);
+
+  uint16_t k = akToKey(b.action);
+  if (k != 0) {
+    uint8_t kk = (k & 0x80) ? (k & 0x7F) : (uint8_t)k;
+    bleKeyboard.press(kk);
+  }
+  bleKeyboard.releaseAll();
+
+  char label[32];
+  formatBindingLabel(label, sizeof(label), b.cmd, b.opt, b.ctrl, b.shift,
+                     b.action == AK_NONE ? "" : akName(b.action));
+  showFlash(label, flashColor);
+}
+
+// 数字键专用：modifier + 当前按下的数字字符
+static void executeNumKey(const ModifierBinding& b, char digit) {
+  if (b.cmd)   bleKeyboard.press(KEY_LEFT_GUI);
+  if (b.opt)   bleKeyboard.press(KEY_LEFT_ALT);
+  if (b.ctrl)  bleKeyboard.press(KEY_LEFT_CTRL);
+  if (b.shift) bleKeyboard.press(KEY_LEFT_SHIFT);
+  bleKeyboard.press(digit);
+  bleKeyboard.releaseAll();
+
+  char label[16];
+  char keyStr[2] = {digit, 0};
+  formatBindingLabel(label, sizeof(label), b.cmd, b.opt, b.ctrl, b.shift, keyStr);
+  showFlash(label, COL_KEY_NUM);
+}
+
+void doCtrlTap()        { executeBinding(g_config.ctrl_tap, COL_KEY_FN); }
+void doOptTap()         { executeBinding(g_config.opt_tap,  TFT_YELLOW); }
+void doFnTap()          { executeBinding(g_config.fn_tap,   COL_KEY_ENT); }
+void doBacktick()       { executeBinding(g_config.backtick, COL_KEY_ESC); }
+void doNumberKey(char c){ executeNumKey(g_config.num_keys, c); }
+
+// AK 动作键的 dropdown 选项分组
+struct AkOption { uint8_t ak; const char* label; };
+static const AkOption AK_OPTIONS_SPECIAL[] = {
+  {AK_NONE, "(无)"}, {AK_ENTER, "Enter"}, {AK_TAB, "Tab"}, {AK_ESC, "Esc"},
+  {AK_BACKSPACE, "Backspace"}, {AK_DELETE, "Delete"}, {AK_SPACE, "Space"},
+  {AK_UP, "↑ 上"}, {AK_DOWN, "↓ 下"}, {AK_LEFT, "← 左"}, {AK_RIGHT, "→ 右"},
+  {AK_PAGE_UP, "PgUp"}, {AK_PAGE_DOWN, "PgDn"}, {AK_HOME, "Home"}, {AK_END, "End"},
+  {AK_CAPS_LOCK, "Caps Lock"},
+};
+static const AkOption AK_OPTIONS_FN[] = {
+  {AK_F1, "F1"}, {AK_F2, "F2"}, {AK_F3, "F3"}, {AK_F4, "F4"},
+  {AK_F5, "F5"}, {AK_F6, "F6"}, {AK_F7, "F7"}, {AK_F8, "F8"},
+  {AK_F9, "F9"}, {AK_F10, "F10"}, {AK_F11, "F11"}, {AK_F12, "F12"},
+};
+
+// 渲染 AK dropdown，optgroup 分组
+static String htmlAkSelect(const char* name, uint8_t curr) {
+  String s = "<select name='"; s += name; s += "'>";
+  s += "<optgroup label='特殊键'>";
+  for (auto& o : AK_OPTIONS_SPECIAL) {
+    s += "<option value='"; s += o.ak; s += "'";
+    if (o.ak == curr) s += " selected";
+    s += ">"; s += o.label; s += "</option>";
+  }
+  s += "</optgroup><optgroup label='功能键'>";
+  for (auto& o : AK_OPTIONS_FN) {
+    s += "<option value='"; s += o.ak; s += "'";
+    if (o.ak == curr) s += " selected";
+    s += ">"; s += o.label; s += "</option>";
+  }
+  s += "</optgroup><optgroup label='字母 a-z'>";
+  for (uint8_t a = AK_A; a <= AK_Z; a++) {
+    s += "<option value='"; s += a; s += "'";
+    if (a == curr) s += " selected";
+    s += ">"; s += (char)('a' + (a - AK_A)); s += "</option>";
+  }
+  s += "</optgroup><optgroup label='数字 0-9'>";
+  for (uint8_t a = AK_0; a <= AK_9; a++) {
+    s += "<option value='"; s += a; s += "'";
+    if (a == curr) s += " selected";
+    s += ">"; s += (char)('0' + (a - AK_0)); s += "</option>";
+  }
+  s += "</optgroup><optgroup label='符号'>";
+  for (uint8_t a = AK_BACKTICK; a <= AK_SLASH; a++) {
+    s += "<option value='"; s += a; s += "'";
+    if (a == curr) s += " selected";
+    s += ">"; s += akName(a); s += "</option>";
+  }
+  s += "</optgroup></select>";
   return s;
 }
-String htmlSelect(const char* name, int curr, const char* opts[], int n) {
-  String s = "<select name='"; s += name; s += "'>";
-  for (int i = 0; i < n; i++) s += htmlOption(i, curr, opts[i]);
-  s += "</select>";
+
+// 渲染一个 ActionBinding 的一行：4 个 mod checkbox + 1 个 AK dropdown
+static String htmlBindingRow(const char* prefix, const char* triggerLabel, const ActionBinding& b) {
+  String s = "<tr><td>";
+  s += triggerLabel;
+  s += "</td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_cmd' value='1'";
+  if (b.cmd) s += " checked"; s += "></td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_opt' value='1'";
+  if (b.opt) s += " checked"; s += "></td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_ctrl' value='1'";
+  if (b.ctrl) s += " checked"; s += "></td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_shift' value='1'";
+  if (b.shift) s += " checked"; s += "></td>";
+  s += "<td>"; s += htmlAkSelect((String(prefix) + "_act").c_str(), b.action); s += "</td>";
+  s += "</tr>";
+  return s;
+}
+// 数字键：只 4 个 mod checkbox
+static String htmlNumRow(const char* prefix, const ModifierBinding& b) {
+  String s = "<tr><td>数字 1-8</td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_cmd' value='1'";
+  if (b.cmd) s += " checked"; s += "></td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_opt' value='1'";
+  if (b.opt) s += " checked"; s += "></td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_ctrl' value='1'";
+  if (b.ctrl) s += " checked"; s += "></td>";
+  s += "<td><input type='checkbox' name='"; s += prefix; s += "_shift' value='1'";
+  if (b.shift) s += " checked"; s += "></td>";
+  s += "<td><i>= 触发的数字</i></td></tr>";
   return s;
 }
 
@@ -1060,6 +1288,11 @@ void handleRoot() {
   body += "legend{font-weight:600;padding:0 .5em}";
   body += "#wifi-list{margin-top:.5em;font-size:.9em}";
   body += "#wifi-list a{display:block;padding:.4em;color:#2563eb;text-decoration:none;border-bottom:1px solid #eee}";
+  body += "table.bindings{width:100%;border-collapse:collapse;font-size:.9em}";
+  body += "table.bindings th,table.bindings td{padding:.4em .3em;text-align:center;border-bottom:1px solid #eee}";
+  body += "table.bindings th:first-child,table.bindings td:first-child{text-align:left;font-weight:600}";
+  body += "table.bindings select{width:auto;min-width:8em}";
+  body += "table.bindings input[type=checkbox]{width:auto;transform:scale(1.3)}";
   body += ".banner{padding:.7em 1em;border-radius:6px;margin-bottom:1em;font-size:.95em}";
   body += ".banner-sta{background:#dcfce7;color:#166534;border:1px solid #86efac}";
   body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
@@ -1094,12 +1327,15 @@ void handleRoot() {
   body += "<div id='wifi-list'></div>";
   body += "</fieldset>";
 
-  body += "<fieldset><legend>键映射</legend>";
-  body += "<label>Ctrl 单按</label>" + htmlSelect("ctrl", g_config.ctrl_action, ctrlNames, 4);
-  body += "<label>Opt 单按</label>" + htmlSelect("opt", g_config.opt_action, optNames, 3);
-  body += "<label>Fn 单按</label>" + htmlSelect("fn", g_config.fn_action, fnNames, 4);
-  body += "<label>反引号 (`)</label>" + htmlSelect("bt", g_config.backtick_action, btNames, 2);
-  body += "<label>数字键 1-8</label>" + htmlSelect("num", g_config.num_action, numNames, 2);
+  body += "<fieldset><legend>键映射（修饰键自由组合 + 任意主键）</legend>";
+  body += "<table class='bindings'>";
+  body += "<thead><tr><th>触发</th><th>Cmd</th><th>Opt</th><th>Ctrl</th><th>Shift</th><th>主键</th></tr></thead><tbody>";
+  body += htmlBindingRow("ctrl", "Ctrl 单按", g_config.ctrl_tap);
+  body += htmlBindingRow("opt",  "Opt 单按",  g_config.opt_tap);
+  body += htmlBindingRow("fn",   "Fn 单按",   g_config.fn_tap);
+  body += htmlBindingRow("bt",   "反引号 `",  g_config.backtick);
+  body += htmlNumRow    ("num",                g_config.num_keys);
+  body += "</tbody></table>";
   body += "</fieldset>";
 
   body += "<button class='save' type='submit'>保存并重启</button>";
@@ -1122,13 +1358,37 @@ void handleRoot() {
   g_web->send(200, "text/html; charset=utf-8", body);
 }
 
+// 表单 → ActionBinding 解析
+static void parseBinding(const char* prefix, ActionBinding& b) {
+  String pCmd = String(prefix) + "_cmd";
+  String pOpt = String(prefix) + "_opt";
+  String pCtrl = String(prefix) + "_ctrl";
+  String pShift = String(prefix) + "_shift";
+  String pAct = String(prefix) + "_act";
+  b.cmd   = g_web->hasArg(pCmd.c_str())   ? 1 : 0;
+  b.opt   = g_web->hasArg(pOpt.c_str())   ? 1 : 0;
+  b.ctrl  = g_web->hasArg(pCtrl.c_str())  ? 1 : 0;
+  b.shift = g_web->hasArg(pShift.c_str()) ? 1 : 0;
+  if (g_web->hasArg(pAct.c_str())) b.action = g_web->arg(pAct.c_str()).toInt();
+}
+static void parseModBinding(const char* prefix, ModifierBinding& b) {
+  String pCmd = String(prefix) + "_cmd";
+  String pOpt = String(prefix) + "_opt";
+  String pCtrl = String(prefix) + "_ctrl";
+  String pShift = String(prefix) + "_shift";
+  b.cmd   = g_web->hasArg(pCmd.c_str())   ? 1 : 0;
+  b.opt   = g_web->hasArg(pOpt.c_str())   ? 1 : 0;
+  b.ctrl  = g_web->hasArg(pCtrl.c_str())  ? 1 : 0;
+  b.shift = g_web->hasArg(pShift.c_str()) ? 1 : 0;
+}
+
 void handleSave() {
-  // 键映射
-  if (g_web->hasArg("ctrl")) g_config.ctrl_action     = g_web->arg("ctrl").toInt();
-  if (g_web->hasArg("opt"))  g_config.opt_action      = g_web->arg("opt").toInt();
-  if (g_web->hasArg("fn"))   g_config.fn_action       = g_web->arg("fn").toInt();
-  if (g_web->hasArg("bt"))   g_config.backtick_action = g_web->arg("bt").toInt();
-  if (g_web->hasArg("num"))  g_config.num_action      = g_web->arg("num").toInt();
+  // 键映射 binding
+  parseBinding   ("ctrl", g_config.ctrl_tap);
+  parseBinding   ("opt",  g_config.opt_tap);
+  parseBinding   ("fn",   g_config.fn_tap);
+  parseBinding   ("bt",   g_config.backtick);
+  parseModBinding("num",  g_config.num_keys);
   saveConfig();
 
   // WiFi creds（密码留空 = 保留旧密码；非空 = 覆盖）
@@ -1204,25 +1464,44 @@ void drawConfigScreen(const char* status, const String& ip) {
 }
 
 // /api/status — JSON 健康状态
+// 一次性写入 fixed buffer，避免 String 拼接 / chunked 编码 curl 兼容问题
+static int abJsonInto(char* buf, int n, const ActionBinding& b) {
+  return snprintf(buf, n, "{\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u}",
+                  b.cmd, b.opt, b.ctrl, b.shift, b.action);
+}
+static int mbJsonInto(char* buf, int n, const ModifierBinding& b) {
+  return snprintf(buf, n, "{\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u}",
+                  b.cmd, b.opt, b.ctrl, b.shift);
+}
+
 void handleStatus() {
-  char json[512];
   int rssi = WiFi.RSSI();
   unsigned long uptime = millis() / 1000;
   int bat = M5Cardputer.Power.getBatteryLevel();
   const char* mode = g_apMode ? "config-ap" : "config-sta";
   const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
   const char* ip   = g_apMode ? g_apIp.c_str() : g_staIp.c_str();
-  snprintf(json, sizeof(json),
+
+  static char buf[1024];
+  int p = 0;
+  p += snprintf(buf + p, sizeof(buf) - p,
     "{\"mode\":\"%s\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
-    "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,"
-    "\"cfg\":{\"ctrl\":%u,\"opt\":%u,\"fn\":%u,\"bt\":%u,\"num\":%u},"
-    "\"stored_ssid\":\"%s\",\"heap_free\":%u}",
-    mode, ssid, ip, rssi, MDNS_NAME, uptime, bat,
-    g_config.ctrl_action, g_config.opt_action, g_config.fn_action,
-    g_config.backtick_action, g_config.num_action,
-    g_wifiSsid.c_str(),
-    (unsigned)ESP.getFreeHeap());
-  g_web->send(200, "application/json", json);
+    "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,\"cfg\":{\"ctrl\":",
+    mode, ssid, ip, rssi, MDNS_NAME, uptime, bat);
+  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.ctrl_tap);
+  p += snprintf(buf + p, sizeof(buf) - p, ",\"opt\":");
+  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.opt_tap);
+  p += snprintf(buf + p, sizeof(buf) - p, ",\"fn\":");
+  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.fn_tap);
+  p += snprintf(buf + p, sizeof(buf) - p, ",\"bt\":");
+  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.backtick);
+  p += snprintf(buf + p, sizeof(buf) - p, ",\"num\":");
+  p += mbJsonInto(buf + p, sizeof(buf) - p, g_config.num_keys);
+  p += snprintf(buf + p, sizeof(buf) - p,
+    "},\"stored_ssid\":\"%s\",\"heap_free\":%u}",
+    g_wifiSsid.c_str(), (unsigned)ESP.getFreeHeap());
+
+  g_web->send(200, "application/json", String(buf));
 }
 
 // /api/screenshot — 当前屏幕 BMP（240x135 16bpp → 24bpp BMP）
