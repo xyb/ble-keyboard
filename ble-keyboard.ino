@@ -892,6 +892,10 @@ void flashBtnA() {
 // ============================================================
 #if IS_CARDPUTER
 
+// WiFi config 模式相关全局（提前到 loadConfig 之前，避免编译顺序问题）
+String g_wifiSsid = "";
+String g_wifiPass = "";
+
 void loadConfig() {
   Preferences prefs;
   prefs.begin("kb", true);
@@ -900,7 +904,14 @@ void loadConfig() {
   g_config.fn_action       = prefs.getUChar("fn",   FN_ENTER);
   g_config.backtick_action = prefs.getUChar("bt",   BT_ESC);
   g_config.num_action      = prefs.getUChar("num",  NUM_CMD_N);
+  g_wifiSsid               = prefs.getString("ssid", "");
+  g_wifiPass               = prefs.getString("pass", "");
   prefs.end();
+  // ⚠️ 开发期默认值：NVS 空时 fallback 到家里的 WiFi。push 前要改成空字符串。
+  if (g_wifiSsid.length() == 0) {
+    g_wifiSsid = "YOUR_SSID";
+    g_wifiPass = "YOUR_PASSWORD";
+  }
 }
 void saveConfig() {
   Preferences prefs;
@@ -911,6 +922,15 @@ void saveConfig() {
   prefs.putUChar("bt",   g_config.backtick_action);
   prefs.putUChar("num",  g_config.num_action);
   prefs.end();
+}
+void saveWifi(const String& ssid, const String& pass) {
+  Preferences prefs;
+  prefs.begin("kb", false);
+  prefs.putString("ssid", ssid);
+  prefs.putString("pass", pass);
+  prefs.end();
+  g_wifiSsid = ssid;
+  g_wifiPass = pass;
 }
 bool consumeConfigBootFlag() {
   Preferences prefs;
@@ -1012,34 +1032,84 @@ void handleRoot() {
   body += "<title>CardPuter Keyboard Config</title>";
   body += "<style>body{font-family:system-ui;max-width:500px;margin:1em auto;padding:0 1em}";
   body += "label{display:block;margin:1em 0 .3em;font-weight:600}";
-  body += "select{width:100%;padding:.5em;font-size:1em}";
-  body += "button{margin-top:1.5em;padding:.7em 1.5em;font-size:1em;width:100%}";
+  body += "select,input{width:100%;padding:.5em;font-size:1em;box-sizing:border-box}";
+  body += "button{margin-top:1.5em;padding:.7em 1.5em;font-size:1em;width:100%;cursor:pointer}";
   body += ".save{background:#2563eb;color:#fff;border:0;border-radius:4px}";
   body += ".reboot{background:#dc2626;color:#fff;border:0;border-radius:4px;margin-top:.5em}";
+  body += ".scan{background:#10b981;color:#fff;border:0;border-radius:4px;margin-top:.3em}";
+  body += "fieldset{margin-top:1.5em;border:1px solid #ddd;border-radius:6px;padding:.5em 1em 1em}";
+  body += "legend{font-weight:600;padding:0 .5em}";
+  body += "#wifi-list{margin-top:.5em;font-size:.9em}";
+  body += "#wifi-list a{display:block;padding:.4em;color:#2563eb;text-decoration:none;border-bottom:1px solid #eee}";
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
+
   body += "<form method='POST' action='/save'>";
+
+  body += "<fieldset><legend>WiFi（连家庭网络）</legend>";
+  body += "<label>SSID</label><input name='ssid' id='ssid' value='";
+  body += g_wifiSsid;
+  body += "'>";
+  body += "<label>密码</label><input name='pass' id='pass' type='password' placeholder='";
+  body += g_wifiPass.length() > 0 ? "(已存，留空保留)" : "";
+  body += "'>";
+  body += "<button type='button' class='scan' onclick='scanWifi()'>扫描附近 WiFi</button>";
+  body += "<div id='wifi-list'></div>";
+  body += "</fieldset>";
+
+  body += "<fieldset><legend>键映射</legend>";
   body += "<label>Ctrl 单按</label>" + htmlSelect("ctrl", g_config.ctrl_action, ctrlNames, 4);
   body += "<label>Opt 单按</label>" + htmlSelect("opt", g_config.opt_action, optNames, 3);
   body += "<label>Fn 单按</label>" + htmlSelect("fn", g_config.fn_action, fnNames, 4);
   body += "<label>反引号 (`)</label>" + htmlSelect("bt", g_config.backtick_action, btNames, 2);
   body += "<label>数字键 1-8</label>" + htmlSelect("num", g_config.num_action, numNames, 2);
+  body += "</fieldset>";
+
   body += "<button class='save' type='submit'>保存并重启</button>";
   body += "</form>";
   body += "<form method='POST' action='/cancel'>";
   body += "<button class='reboot' type='submit'>放弃 / 直接重启</button>";
   body += "</form>";
+
+  body += "<script>";
+  body += "async function scanWifi(){";
+  body += "const el=document.getElementById('wifi-list');el.textContent='扫描中…';";
+  body += "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();";
+  body += "if(!nets.length){el.textContent='没找到 WiFi';return}";
+  body += "el.innerHTML=nets.map(n=>`<a href='#' onclick=\"pickSsid('${n.ssid.replace(/\"/g,'&quot;')}');return false\">${n.ssid} <span style='color:#888'>(${n.rssi}dBm${n.enc?' 🔒':''})</span></a>`).join('')";
+  body += "}catch(e){el.textContent='扫描失败：'+e}}";
+  body += "function pickSsid(s){document.getElementById('ssid').value=s;document.getElementById('pass').focus()}";
+  body += "</script>";
+
   body += "</body></html>";
   g_web->send(200, "text/html; charset=utf-8", body);
 }
 
 void handleSave() {
+  // 键映射
   if (g_web->hasArg("ctrl")) g_config.ctrl_action     = g_web->arg("ctrl").toInt();
   if (g_web->hasArg("opt"))  g_config.opt_action      = g_web->arg("opt").toInt();
   if (g_web->hasArg("fn"))   g_config.fn_action       = g_web->arg("fn").toInt();
   if (g_web->hasArg("bt"))   g_config.backtick_action = g_web->arg("bt").toInt();
   if (g_web->hasArg("num"))  g_config.num_action      = g_web->arg("num").toInt();
   saveConfig();
+
+  // WiFi creds（密码留空 = 保留旧密码；非空 = 覆盖）
+  bool wifiChanged = false;
+  if (g_web->hasArg("ssid")) {
+    String newSsid = g_web->arg("ssid");
+    String newPass = g_web->hasArg("pass") ? g_web->arg("pass") : String("");
+    // 空密码视为保留
+    if (newPass.length() == 0) newPass = g_wifiPass;
+    if (newSsid != g_wifiSsid || newPass != g_wifiPass) {
+      saveWifi(newSsid, newPass);
+      wifiChanged = true;
+    }
+  }
+
+  // WiFi 改了 → 重启再次进配置模式（让用户看到新 STA 是否能连上）
+  // 没改 → 重启回正常模式
+  if (wifiChanged) requestConfigBoot();
   g_web->send(200, "text/html; charset=utf-8",
               "<html><body style='font-family:system-ui;text-align:center;margin-top:3em'>"
               "<h2>已保存，正在重启…</h2></body></html>");
@@ -1058,56 +1128,71 @@ void handleCancel() {
 // ===== 配置模式：STA 连家庭 WiFi（写死，仅试验用）=====
 #include <ESPmDNS.h>
 
-const char* WIFI_SSID = "YOUR_SSID";
-const char* WIFI_PASS = "YOUR_PASSWORD";
 const char* MDNS_NAME = "cardputer-kb";  // 访问 http://cardputer-kb.local
-const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就重启回正常模式
+const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就 fallback 到 AP
 
 unsigned long g_configEnterTime = 0;
 String g_staIp = "";
+String g_apIp = "";
 bool g_staConnected = false;
+bool g_apMode = false;
+char g_apSsidStr[32] = {0};
+// g_wifiSsid / g_wifiPass declared earlier (before loadConfig)
 
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
   M5Cardputer.Display.setTextColor(WHITE, BLACK);
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setCursor(8, 4);
-  M5Cardputer.Display.print("WiFi Config");
+  M5Cardputer.Display.print(g_apMode ? "AP Setup" : "WiFi Config");
 
   M5Cardputer.Display.setTextSize(1);
   M5Cardputer.Display.setCursor(8, 32);
   M5Cardputer.Display.print("SSID:   ");
-  M5Cardputer.Display.println(WIFI_SSID);
+  M5Cardputer.Display.println(g_apMode ? g_apSsidStr : g_wifiSsid.c_str());
   M5Cardputer.Display.setCursor(8, 48);
   M5Cardputer.Display.print("Status: ");
   M5Cardputer.Display.println(status);
   M5Cardputer.Display.setCursor(8, 64);
   M5Cardputer.Display.print("IP:     ");
   M5Cardputer.Display.println(ip);
-  M5Cardputer.Display.setCursor(8, 80);
-  M5Cardputer.Display.print("mDNS:   http://");
-  M5Cardputer.Display.print(MDNS_NAME);
-  M5Cardputer.Display.println(".local");
+  if (!g_apMode) {
+    M5Cardputer.Display.setCursor(8, 80);
+    M5Cardputer.Display.print("mDNS:   http://");
+    M5Cardputer.Display.print(MDNS_NAME);
+    M5Cardputer.Display.println(".local");
+  } else {
+    M5Cardputer.Display.setCursor(8, 80);
+    M5Cardputer.Display.setTextColor(0xC618, BLACK);
+    M5Cardputer.Display.println("Connect to AP, then");
+    M5Cardputer.Display.setCursor(8, 92);
+    M5Cardputer.Display.print("open http://");
+    M5Cardputer.Display.println(ip);
+  }
 
-  M5Cardputer.Display.setCursor(8, 110);
+  M5Cardputer.Display.setCursor(8, 115);
   M5Cardputer.Display.setTextColor(0xFD20, BLACK);
   M5Cardputer.Display.println("Reboot to exit");
 }
 
 // /api/status — JSON 健康状态
 void handleStatus() {
-  char json[384];
+  char json[512];
   int rssi = WiFi.RSSI();
   unsigned long uptime = millis() / 1000;
   int bat = M5Cardputer.Power.getBatteryLevel();
+  const char* mode = g_apMode ? "config-ap" : "config-sta";
+  const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
+  const char* ip   = g_apMode ? g_apIp.c_str() : g_staIp.c_str();
   snprintf(json, sizeof(json),
-    "{\"mode\":\"config\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
+    "{\"mode\":\"%s\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
     "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,"
     "\"cfg\":{\"ctrl\":%u,\"opt\":%u,\"fn\":%u,\"bt\":%u,\"num\":%u},"
-    "\"heap_free\":%u}",
-    WIFI_SSID, g_staIp.c_str(), rssi, MDNS_NAME, uptime, bat,
+    "\"stored_ssid\":\"%s\",\"heap_free\":%u}",
+    mode, ssid, ip, rssi, MDNS_NAME, uptime, bat,
     g_config.ctrl_action, g_config.opt_action, g_config.fn_action,
     g_config.backtick_action, g_config.num_action,
+    g_wifiSsid.c_str(),
     (unsigned)ESP.getFreeHeap());
   g_web->send(200, "application/json", json);
 }
@@ -1151,14 +1236,63 @@ void handleScreenshot() {
   }
 }
 
-void setupConfigMode() {
-  Serial.begin(115200);
-  Serial.println("\n[config] entering STA mode");
-  drawConfigScreen("Connecting...", "");
+// /api/wifi/scan — 列附近 WiFi（参考 audio-recorder 实现）
+void handleWifiScan() {
+  int n = WiFi.scanNetworks(false, false, false, 300);
+  if (n < 0) n = 0;
+  String json = "[";
+  for (int i = 0; i < n && i < 20; i++) {
+    if (i > 0) json += ",";
+    String s = WiFi.SSID(i);
+    s.replace("\\", "\\\\");
+    s.replace("\"", "\\\"");
+    json += "{\"ssid\":\"";
+    json += s;
+    json += "\",\"rssi\":";
+    json += WiFi.RSSI(i);
+    json += ",\"enc\":";
+    json += (WiFi.encryptionType(i) != WIFI_AUTH_OPEN) ? "true" : "false";
+    json += "}";
+  }
+  json += "]";
+  WiFi.scanDelete();
+  g_web->send(200, "application/json", json);
+}
 
+static void registerWebRoutes() {
+  g_web->on("/",                HTTP_GET,  handleRoot);
+  g_web->on("/save",            HTTP_POST, handleSave);
+  g_web->on("/cancel",          HTTP_POST, handleCancel);
+  g_web->on("/api/status",      HTTP_GET,  handleStatus);
+  g_web->on("/api/screenshot",  HTTP_GET,  handleScreenshot);
+  g_web->on("/api/wifi/scan",   HTTP_GET,  handleWifiScan);
+  g_web->on("/api/reboot",      HTTP_POST, handleCancel);
+}
+
+static void startApMode() {
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_BT);
+  snprintf(g_apSsidStr, sizeof(g_apSsidStr), "CardPuter-KB-CFG-%02X%02X", mac[4], mac[5]);
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(g_apSsidStr);
+  delay(200);
+  g_apIp = WiFi.softAPIP().toString();
+  g_apMode = true;
+  Serial.printf("[config] AP started: %s, ip=%s\n", g_apSsidStr, g_apIp.c_str());
+
+  g_web = new WebServer(80);
+  registerWebRoutes();
+  g_web->begin();
+  drawConfigScreen("AP active", g_apIp);
+}
+
+static bool tryStaConnect() {
+  if (g_wifiSsid.length() == 0) return false;
+  drawConfigScreen("Connecting...", g_wifiSsid);
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(MDNS_NAME);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.begin(g_wifiSsid.c_str(), g_wifiPass.c_str());
 
   unsigned long start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_TIMEOUT_MS) {
@@ -1166,33 +1300,34 @@ void setupConfigMode() {
     Serial.print(".");
   }
   Serial.println();
-
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[config] WiFi failed, reverting to BLE mode");
-    drawConfigScreen("FAILED, reboot", "");
-    delay(2000);
-    esp_restart();
+    Serial.println("[config] STA connect failed");
+    WiFi.disconnect(true);
+    return false;
   }
-
   g_staConnected = true;
   g_staIp = WiFi.localIP().toString();
-  Serial.printf("[config] connected, IP=%s\n", g_staIp.c_str());
-
+  Serial.printf("[config] STA connected, IP=%s\n", g_staIp.c_str());
   if (MDNS.begin(MDNS_NAME)) {
     MDNS.addService("http", "tcp", 80);
     Serial.printf("[config] mDNS: %s.local\n", MDNS_NAME);
   }
-
   g_web = new WebServer(80);
-  g_web->on("/",                HTTP_GET,  handleRoot);
-  g_web->on("/save",            HTTP_POST, handleSave);
-  g_web->on("/cancel",          HTTP_POST, handleCancel);
-  g_web->on("/api/status",      HTTP_GET,  handleStatus);
-  g_web->on("/api/screenshot",  HTTP_GET,  handleScreenshot);
-  g_web->on("/api/reboot",      HTTP_POST, handleCancel);
+  registerWebRoutes();
   g_web->begin();
-
   drawConfigScreen("Connected", g_staIp);
+  return true;
+}
+
+void setupConfigMode() {
+  Serial.begin(115200);
+  delay(100);
+  Serial.printf("[config] enter, stored ssid='%s'\n", g_wifiSsid.c_str());
+
+  // 有 stored creds → 试 STA；空或失败 → AP fallback
+  if (!tryStaConnect()) {
+    startApMode();
+  }
   g_configEnterTime = millis();
 }
 
@@ -1295,8 +1430,11 @@ void loop() {
     requestConfigBoot();
     esp_restart();
   }
-  // 开发期备用触发：USB 串口收到 "config\n" 进配置模式
-  static char serialBuf[16];
+  // 开发期备用串口命令：
+  //   "config\n"           → 进配置模式
+  //   "wifi <ssid> <pass>" → 写 WiFi creds 到 NVS（不重启）
+  //   "wifi-clear\n"       → 清掉 NVS 里的 ssid/pass
+  static char serialBuf[96];
   static uint8_t serialIdx = 0;
   while (Serial.available()) {
     char c = Serial.read();
@@ -1307,6 +1445,22 @@ void loop() {
         requestConfigBoot();
         delay(50);
         esp_restart();
+      } else if (strncmp(serialBuf, "wifi ", 5) == 0) {
+        char* sp = strchr(serialBuf + 5, ' ');
+        if (sp) {
+          *sp = 0;
+          String ssid(serialBuf + 5);
+          String pass(sp + 1);
+          saveWifi(ssid, pass);
+          Serial.printf("[trigger] saved wifi ssid='%s' (pass len=%d)\n", ssid.c_str(), pass.length());
+        } else {
+          Serial.println("[trigger] usage: wifi <ssid> <pass>");
+        }
+      } else if (strcmp(serialBuf, "wifi-clear") == 0) {
+        saveWifi("", "");
+        Serial.println("[trigger] cleared wifi creds");
+      } else if (serialIdx > 0) {
+        Serial.printf("[trigger] unknown cmd: %s\n", serialBuf);
       }
       serialIdx = 0;
     } else if (serialIdx < sizeof(serialBuf) - 1) {
