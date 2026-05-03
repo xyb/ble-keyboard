@@ -167,6 +167,8 @@ enum TriggerKind : uint8_t {
   TK_OPT,
   TK_FN,
   TK_KEY,         // 一个具体字符键（trigger_key 字段记录字符）
+  TK_SHIFT,       // cardputer 上印的 "Aa" 键（M5Cardputer lib 上是 LEFT_SHIFT）
+  TK_ALT,         // cardputer 上印的 "Alt" 键
 };
 
 // 触发事件：单击 / 双击 / 三击 / 长按
@@ -280,6 +282,10 @@ bool ctrlPrevHeld = false;
 bool ctrlUsedAsModifier = false;
 bool optPrevHeld = false;
 bool optUsedAsModifier = false;
+bool shiftPrevHeld = false;
+bool shiftUsedAsModifier = false;
+bool altPrevHeld = false;
+bool altUsedAsModifier = false;
 bool capsLocked = false;
 
 // Key repeat state
@@ -1282,7 +1288,7 @@ struct ModTapState {
   uint8_t tap_count = 0;
   bool long_fired = false;
 };
-ModTapState ctrlState, optState, fnState;
+ModTapState ctrlState, optState, fnState, shiftState, altState;
 
 static uint8_t tapCountToEvent(uint8_t n) {
   if (n >= 3) return TEV_TRIPLE;
@@ -1437,11 +1443,11 @@ const char JS_CODE[] =
 "}"
 "function trigSelectHtml(curr,key){"
 "let cur='';"
-"if(curr>=1&&curr<=3)cur='m'+curr;"
+"if((curr>=1&&curr<=3)||curr==5||curr==6)cur='m'+curr;"
 "else if(curr==4&&key)cur='k'+key;"
 "let h=\"<select class='b-trig'>\";"
 "h+=\"<optgroup label='修饰键'>\";"
-"for(const [v,l] of [['m1','Ctrl'],['m2','Opt'],['m3','Fn']])"
+"for(const [v,l] of [['m1','Ctrl'],['m2','Opt'],['m3','Fn'],['m5','Aa (Shift)'],['m6','Alt']])"
 "h+=`<option value='${v}' ${cur==v?'selected':''}>${l}</option>`;"
 "h+=\"</optgroup>\";"
 "for(const grp of TRIG_KEY_OPTS){"
@@ -1455,20 +1461,24 @@ const char JS_CODE[] =
 "return h+\"</select>\";"
 "}"
 "function eventSelectHtml(curr,longMs){"
+"const showLong=curr==3?'flex':'none';"
 "let h=\"<select class='b-event' onchange='eventChanged(this)'>\";"
 "for(const v in EVENTS) h+=`<option value='${v}' ${v==curr?'selected':''}>${EVENTS[v]}</option>`;"
 "h+=\"</select>\";"
-"h+=`<input type='number' class='b-longms' min='100' max='5000' step='50' value='${longMs||500}' style='display:${curr==3?'inline':'none'}' title='长按毫秒'>`;"
+"h+=`<span class='long-row' style='display:${showLong}'>`;"
+"h+=`<input type='number' class='b-longms' min='100' max='5000' step='50' value='${longMs||500}' title='长按毫秒'>`;"
+"h+=\"<span class='unit'>ms</span>\";"
+"h+=\"</span>\";"
 "return h;"
 "}"
 "function eventChanged(sel){"
-"const inp=sel.parentElement.querySelector('.b-longms');"
-"inp.style.display=sel.value=='3'?'inline':'none';"
+"const row=sel.parentElement.querySelector('.long-row');"
+"row.style.display=sel.value=='3'?'flex':'none';"
 "}"
 "function rowHtml(b){"
 "b=b||{trigger:1,key:0,event:0,long_ms:500,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
 "return `<tr class='bind-row'>"
-"<td>${trigSelectHtml(b.trigger,b.key)}</td>"
+"<td class='col-trig'>${trigSelectHtml(b.trigger,b.key)}</td>"
 "<td class='col-event'><div class='event-cell'>${eventSelectHtml(b.event,b.long_ms)}</div></td>"
 "<td class='col-mod'><input type='checkbox' class='b-cmd' ${b.cmd?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-opt' ${b.opt?'checked':''}></td>"
@@ -1595,20 +1605,23 @@ void handleRoot() {
   body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
   // 用 <table> 让 header 和 row 列宽自动对齐
   body += "table.bind-table{width:100%;border-collapse:collapse;margin-top:.5em}";
-  body += "table.bind-table th{font-size:.8em;color:#666;font-weight:600;padding:.4em .2em;border-bottom:1px solid #ccc;text-align:center}";
-  body += "table.bind-table th:first-child{text-align:left}";
+  body += "table.bind-table th{font-size:.8em;color:#666;font-weight:600;padding:.4em .2em;border-bottom:1px solid #ccc;text-align:center;white-space:nowrap}";
   body += "table.bind-table td{padding:.4em .2em;border-bottom:1px solid #eee;text-align:center;vertical-align:middle}";
-  body += "table.bind-table td:first-child{text-align:left}";
+  body += "table.bind-table th.col-trig,table.bind-table td.col-trig{width:7em}";
   body += "table.bind-table th.col-event,table.bind-table td.col-event{width:7.5em}";
+  body += "table.bind-table .event-cell .long-row{display:flex;gap:.25em;align-items:center;margin-top:.25em;width:100%}";
+  body += "table.bind-table .event-cell .long-row input.b-longms{flex:1;min-width:0;text-align:right}";
+  body += "table.bind-table .event-cell .long-row .unit{font-size:.85em;color:#666;flex-shrink:0}";
   body += "table.bind-table th.col-mod,table.bind-table td.col-mod{width:2.4em}";
-  body += "table.bind-table th.col-act,table.bind-table td.col-act{width:8.5em}";
+  body += "table.bind-table th.col-act,table.bind-table td.col-act{width:10em}";
   body += "table.bind-table th.col-del,table.bind-table td.col-del{width:2em}";
-  body += "table.bind-table .event-cell{display:flex;gap:.2em;align-items:center}";
-  body += "table.bind-table .event-cell select{flex:1;min-width:0}";
-  body += "table.bind-table .event-cell input.b-longms{width:3.5em;flex-shrink:0;display:none}";
+  body += "table.bind-table .event-cell{display:flex;flex-direction:column;align-items:stretch;gap:0}";
+  body += "table.bind-table .event-cell select{width:100%;min-width:0}";
   body += "table.bind-table input[type=checkbox]{transform:scale(1.2);margin:0}";
   body += "table.bind-table select,table.bind-table input[type=text]{font-size:.9em;padding:.3em;width:100%;box-sizing:border-box}";
-  body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:0;font-size:1.4em;line-height:1;color:#999;width:1.6em;height:1.6em;display:inline-flex;align-items:center;justify-content:center;border-radius:50%}";
+  // del 按钮：尺寸 / 字体 / 行高都跟 td 内 select 对齐，避免 baseline 错位
+  body += "table.bind-table td.col-del{line-height:0}";
+  body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:0;margin:0;font-size:1.1em;color:#999;width:1.8em;height:1.8em;text-align:center;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}";
   body += "table.bind-table .del:hover{background:#fee;color:#c00}";
   body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
   body += "</style></head><body>";
@@ -1636,7 +1649,7 @@ void handleRoot() {
 
   body += "<fieldset><legend>键映射（每行 = 一条触发→动作）</legend>";
   body += "<table class='bind-table'><thead><tr>";
-  body += "<th>触发键</th>";
+  body += "<th class='col-trig'>触发键</th>";
   body += "<th class='col-event'>事件</th>";
   body += "<th class='col-mod'>Cmd</th><th class='col-mod'>Opt</th><th class='col-mod'>Ctrl</th><th class='col-mod'>Shift</th>";
   body += "<th class='col-act'>主键</th>";
@@ -1701,18 +1714,18 @@ void handleRoot() {
   }
   body += "]}];";
 
-  // trigger 字面键选项：value 用 ASCII char code，label 用字符自身。
-  // 双引号包字符串以便 ' 和反斜杠等特殊字符不破 JS 字面量。
+  // trigger 字面键选项：value 用 ASCII char code，label 用字符自身或友好名。
+  // 列表覆盖 cardputer 4×14 矩阵里所有非 modifier 的物理键
+  // （3 个 modifier Ctrl/Opt/Fn 在上面单独列；ALT 不参与 binding）
   body += "const TRIG_KEY_OPTS=[";
-  body += "{g:'数字',o:[";
+  body += "{g:'特殊键',o:[";
+  body += "[32,\"Space\"],[9,\"Tab\"],[10,\"Enter\"],[8,\"Backspace\"]";
+  body += "]},{g:'数字',o:[";
   {
-    const char* row = "`1234567890-=";
+    const char* row = "1234567890";
     for (const char* p = row; *p; p++) {
       if (p != row) body += ",";
-      String esc;
-      if (*p == '\\' || *p == '"') esc += '\\';
-      esc += *p;
-      body += "[" + String((int)(uint8_t)*p) + ",\"" + esc + "\"]";
+      body += "[" + String((int)(uint8_t)*p) + ",\"" + *p + "\"]";
     }
   }
   body += "]},{g:'字母',o:[";
@@ -1722,7 +1735,7 @@ void handleRoot() {
   }
   body += "]},{g:'符号',o:[";
   {
-    const char* row = ";',./[]\\";
+    const char* row = "`-=[]\\;',./";
     for (const char* p = row; *p; p++) {
       if (p != row) body += ",";
       String esc;
@@ -2272,9 +2285,21 @@ void loop() {
   // 每帧轮询 modifier 多击/长按状态（即使 keyState 没变也要触发 tap window 结束动作）
   {
     auto& _ks = M5Cardputer.Keyboard.keysState();
-    pollMod(&ctrlState, TK_CTRL, COL_KEY_FN,  _ks.ctrl);
-    pollMod(&optState,  TK_OPT,  TFT_YELLOW,  _ks.opt);
-    pollMod(&fnState,   TK_FN,   COL_KEY_ENT, _ks.fn);
+    pollMod(&ctrlState,  TK_CTRL,  COL_KEY_FN,  _ks.ctrl);
+    pollMod(&optState,   TK_OPT,   TFT_YELLOW,  _ks.opt);
+    pollMod(&fnState,    TK_FN,    COL_KEY_ENT, _ks.fn);
+    pollMod(&shiftState, TK_SHIFT, TFT_CYAN,    _ks.shift);
+    pollMod(&altState,   TK_ALT,   TFT_MAGENTA, _ks.alt);
+
+    // Fn 长按 5 秒进配置模式：必须每帧跑（按住不动时 isChange()==false 进不去下面的 block）
+    unsigned long _now = millis();
+    if (_ks.fn && !fnUsedAsModifier && fnPressStart > 0
+        && (_now - fnPressStart >= FN_LONG_PRESS_MS)) {
+      showFlash("Config Mode", TFT_YELLOW);
+      delay(800);
+      requestConfigBoot();
+      esp_restart();
+    }
   }
 
   if (M5Cardputer.Keyboard.isChange()) {
@@ -2282,25 +2307,19 @@ void loop() {
     if (M5Cardputer.Keyboard.isPressed()) screenWake();
 
     auto& keys = M5Cardputer.Keyboard.keysState();
-    bool fnNow   = keys.fn;
-    bool ctrlNow = keys.ctrl;
-    bool optNow  = keys.opt;
-    bool shiftOn = keys.shift;
+    bool fnNow    = keys.fn;
+    bool ctrlNow  = keys.ctrl;
+    bool optNow   = keys.opt;
+    bool shiftOn  = keys.shift;
+    bool altNow   = keys.alt;
 
     // --- Modifier 按下边沿：reset usedAsModifier + 调 onModPress ---
     unsigned long _now = millis();
-    if (fnNow && !fnPrevHeld)     { fnUsedAsModifier = false; fnPressStart = _now; onModPress(&fnState, _now); }
-    if (ctrlNow && !ctrlPrevHeld) { ctrlUsedAsModifier = false; onModPress(&ctrlState, _now); }
-    if (optNow && !optPrevHeld)   { optUsedAsModifier = false; onModPress(&optState, _now); }
-
-    // --- Fn 长按 5 秒进入 WiFi 配置模式（独立路径，优先于 binding 长按）---
-    if (fnNow && !fnUsedAsModifier && fnPressStart > 0
-        && (_now - fnPressStart >= FN_LONG_PRESS_MS)) {
-      showFlash("Config Mode", TFT_YELLOW);
-      delay(800);
-      requestConfigBoot();
-      esp_restart();
-    }
+    if (fnNow && !fnPrevHeld)         { fnUsedAsModifier = false; fnPressStart = _now; onModPress(&fnState, _now); }
+    if (ctrlNow && !ctrlPrevHeld)     { ctrlUsedAsModifier = false; onModPress(&ctrlState, _now); }
+    if (optNow && !optPrevHeld)       { optUsedAsModifier = false; onModPress(&optState, _now); }
+    if (shiftOn && !shiftPrevHeld)    { shiftUsedAsModifier = false; onModPress(&shiftState, _now); }
+    if (altNow && !altPrevHeld)       { altUsedAsModifier = false; onModPress(&altState, _now); }
 
     // --- Modifier 释放边沿：调 onModRelease ---
     if (!fnNow && fnPrevHeld) {
@@ -2315,14 +2334,25 @@ void loop() {
       onModRelease(&optState, _now, optUsedAsModifier, TK_OPT, TFT_YELLOW);
       screenWake();
     }
-    fnPrevHeld   = fnNow;
-    ctrlPrevHeld = ctrlNow;
-    optPrevHeld  = optNow;
+    if (!shiftOn && shiftPrevHeld) {
+      onModRelease(&shiftState, _now, shiftUsedAsModifier, TK_SHIFT, TFT_CYAN);
+      screenWake();
+    }
+    if (!altNow && altPrevHeld) {
+      onModRelease(&altState, _now, altUsedAsModifier, TK_ALT, TFT_MAGENTA);
+      screenWake();
+    }
+    fnPrevHeld    = fnNow;
+    ctrlPrevHeld  = ctrlNow;
+    optPrevHeld   = optNow;
+    shiftPrevHeld = shiftOn;
+    altPrevHeld   = altNow;
 
     // Which modifiers are active as BLE modifiers (held + other key)?
     bool modCtrl  = ctrlNow;  // Ctrl held → BLE Ctrl modifier
     bool modOpt   = optNow;   // Opt held  → BLE Alt/Option modifier
     bool modShift = shiftOn;  // Shift held → BLE Shift modifier
+    bool modAlt   = altNow;   // Alt held  → BLE Alt modifier (与 Opt 都映射 LEFT_ALT，硬件上互为冗余)
 
     // Helper: press active BLE modifiers
     #define PRESS_MODS() do { \
@@ -2338,8 +2368,10 @@ void loop() {
       // Mark modifiers as "used" only when non-modifier keys are also pressed
       bool hasContentKeys = !keys.word.empty() || keys.enter || keys.del || keys.space || keys.tab;
       if (hasContentKeys) {
-        if (ctrlNow) ctrlUsedAsModifier = true;
-        if (optNow)  optUsedAsModifier = true;
+        if (ctrlNow)  ctrlUsedAsModifier  = true;
+        if (optNow)   optUsedAsModifier   = true;
+        if (shiftOn)  shiftUsedAsModifier = true;
+        if (altNow)   altUsedAsModifier   = true;
       }
 
       for (auto c : keys.word) {
@@ -2386,10 +2418,24 @@ void loop() {
       // Special keys via boolean flags.
       // Enter/del/tab are only in flags (not in keys.word).
       // Space is in BOTH flag and word per M5Cardputer lib; word loop skips it so this is the single source of truth.
-      if (keys.enter) { SEND_WITH_MODS(KEY_RETURN);    screenWake(); }
-      if (keys.del)   { SEND_WITH_MODS(KEY_BACKSPACE);  screenWake(); }
-      if (keys.space) { SEND_WITH_MODS(' ');             screenWake(); }
-      if (keys.tab)   { SEND_WITH_MODS(KEY_TAB);        screenWake(); }
+      // Normal mode 下先查 binding，命中则消费；带 modifier 时直接透传不查 binding
+      bool noLayer = !modCtrl && !modOpt && !fnNow;
+      if (keys.enter) {
+        if (!(noLayer && dispatchKeyTap('\n'))) SEND_WITH_MODS(KEY_RETURN);
+        screenWake();
+      }
+      if (keys.del) {
+        if (!(noLayer && dispatchKeyTap('\b'))) SEND_WITH_MODS(KEY_BACKSPACE);
+        screenWake();
+      }
+      if (keys.space) {
+        if (!(noLayer && dispatchKeyTap(' '))) SEND_WITH_MODS(' ');
+        screenWake();
+      }
+      if (keys.tab) {
+        if (!(noLayer && dispatchKeyTap('\t'))) SEND_WITH_MODS(KEY_TAB);
+        screenWake();
+      }
     }
 
     #undef PRESS_MODS
