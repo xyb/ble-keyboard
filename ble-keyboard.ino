@@ -156,41 +156,75 @@ enum AK : uint8_t {
   AK_SEMICOLON, AK_QUOTE, AK_COMMA, AK_PERIOD, AK_SLASH,
 };
 
-// 一个完整的 binding：4 个修饰位 + 一个主键
-struct ActionBinding {
-  uint8_t cmd;
-  uint8_t opt;
-  uint8_t ctrl;
-  uint8_t shift;
-  uint8_t action;  // AK 枚举
+// 触发类型
+enum TriggerKind : uint8_t {
+  TK_NONE = 0,
+  TK_CTRL_TAP,    // Ctrl 单按
+  TK_OPT_TAP,     // Opt 单按
+  TK_FN_TAP,      // Fn 单按
+  TK_KEY,         // 一个具体字符键（trigger_key 字段记录字符）
+  TK_NUM_RANGE,   // 数字 1-8 批量（action 忽略，发"修饰键 + 触发的数字"）
 };
 
-// 数字键 binding：只有修饰位，主键 = 当前按下的数字字符
-struct ModifierBinding {
+// 单条 binding
+struct Binding {
+  uint8_t trigger;       // TriggerKind
+  uint8_t trigger_key;   // TK_KEY 时使用，存 ASCII 字符（如 '`' / 'j'）
   uint8_t cmd;
   uint8_t opt;
   uint8_t ctrl;
   uint8_t shift;
+  uint8_t action;        // AK 枚举（TK_NUM_RANGE 时忽略）
 };
+
+constexpr int MAX_BINDINGS = 16;
 
 struct KbConfig {
-  ActionBinding   ctrl_tap;
-  ActionBinding   opt_tap;
-  ActionBinding   fn_tap;
-  ActionBinding   backtick;
-  ModifierBinding num_keys;
+  Binding  bindings[MAX_BINDINGS];
+  uint8_t  count;
 };
 
-// 默认 preset：xyb 当前用法（语音输入工作流）
-const KbConfig DEFAULT_PRESET = {
-  /* ctrl_tap  */ {0, 1, 0, 0, AK_TAB},        // Opt+Tab → macOS 听写
-  /* opt_tap   */ {0, 0, 0, 0, AK_CAPS_LOCK},  // Caps Lock 切换
-  /* fn_tap    */ {0, 0, 0, 0, AK_ENTER},      // Enter
-  /* backtick  */ {0, 0, 0, 0, AK_ESC},        // Esc
-  /* num_keys  */ {1, 0, 0, 0},                // Cmd+digit → Ghostty tab
+// 预设 profile：xyb 默认（语音输入工作流）
+const KbConfig PRESET_XYB_DEFAULT = {
+  {
+    {TK_CTRL_TAP,  0,  0, 1, 0, 0, AK_TAB},        // Ctrl→Opt+Tab（macOS 听写）
+    {TK_OPT_TAP,   0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt→CapsLock
+    {TK_FN_TAP,    0,  0, 0, 0, 0, AK_ENTER},      // Fn→Enter
+    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
+    {TK_NUM_RANGE, 0,  1, 0, 0, 0, AK_NONE},       // 数字 1-8→Cmd+digit
+  },
+  5
 };
 
-KbConfig g_config = DEFAULT_PRESET;
+// 预设 profile：纯透传（所有键直接发字面字符，无映射）
+const KbConfig PRESET_PASSTHROUGH = {
+  {},
+  0
+};
+
+// 预设 profile：Ghostty 重度（终端工作流）
+const KbConfig PRESET_GHOSTTY = {
+  {
+    {TK_CTRL_TAP,  0,  1, 0, 0, 0, AK_T},          // Ctrl→Cmd+T（新 tab）
+    {TK_OPT_TAP,   0,  1, 0, 0, 0, AK_W},          // Opt→Cmd+W（关 tab）
+    {TK_FN_TAP,    0,  1, 0, 0, 0, AK_K},          // Fn→Cmd+K（清屏）
+    {TK_KEY,      '`', 0, 0, 0, 0, AK_ESC},        // `→Esc
+    {TK_NUM_RANGE, 0,  1, 0, 0, 0, AK_NONE},       // 1-8→Cmd+digit（切 tab）
+  },
+  5
+};
+
+const KbConfig& DEFAULT_PRESET = PRESET_XYB_DEFAULT;
+
+struct PresetEntry { const char* name; const KbConfig* cfg; };
+const PresetEntry PRESETS[] = {
+  {"xyb 默认（语音输入）",  &PRESET_XYB_DEFAULT},
+  {"纯透传（无映射）",      &PRESET_PASSTHROUGH},
+  {"Ghostty 重度（终端）",  &PRESET_GHOSTTY},
+};
+constexpr int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
+
+KbConfig g_config = PRESET_XYB_DEFAULT;
 
 bool g_config_mode = false;
 WebServer* g_web = nullptr;
@@ -947,48 +981,33 @@ bool g_staConnected = false;
 bool g_apMode = false;
 char g_apSsidStr[32] = {0};
 
-// ActionBinding 序列化为 5 字节 blob
-static void abPack(uint8_t out[5], const ActionBinding& b) {
-  out[0] = b.cmd; out[1] = b.opt; out[2] = b.ctrl; out[3] = b.shift; out[4] = b.action;
+// 单条 binding 序列化为 7 字节（用字面值，避免 Arduino 自动 forward decl 看不到 constexpr）
+#define BIND_BYTES 7
+static void bindingPack(uint8_t* out, const Binding& b) {
+  out[0] = b.trigger; out[1] = b.trigger_key;
+  out[2] = b.cmd; out[3] = b.opt; out[4] = b.ctrl; out[5] = b.shift;
+  out[6] = b.action;
 }
-static void abUnpack(const uint8_t in[5], ActionBinding& b) {
-  b.cmd = in[0] ? 1 : 0; b.opt = in[1] ? 1 : 0; b.ctrl = in[2] ? 1 : 0;
-  b.shift = in[3] ? 1 : 0; b.action = in[4];
-}
-static void mbPack(uint8_t out[4], const ModifierBinding& b) {
-  out[0] = b.cmd; out[1] = b.opt; out[2] = b.ctrl; out[3] = b.shift;
-}
-static void mbUnpack(const uint8_t in[4], ModifierBinding& b) {
-  b.cmd = in[0] ? 1 : 0; b.opt = in[1] ? 1 : 0; b.ctrl = in[2] ? 1 : 0; b.shift = in[3] ? 1 : 0;
-}
-
-static void loadBinding(Preferences& p, const char* key, ActionBinding& dst, const ActionBinding& def) {
-  uint8_t buf[5];
-  size_t n = p.getBytes(key, buf, 5);
-  if (n == 5) abUnpack(buf, dst); else dst = def;
-}
-static void saveBinding(Preferences& p, const char* key, const ActionBinding& b) {
-  uint8_t buf[5]; abPack(buf, b);
-  p.putBytes(key, buf, 5);
-}
-static void loadModBinding(Preferences& p, const char* key, ModifierBinding& dst, const ModifierBinding& def) {
-  uint8_t buf[4];
-  size_t n = p.getBytes(key, buf, 4);
-  if (n == 4) mbUnpack(buf, dst); else dst = def;
-}
-static void saveModBinding(Preferences& p, const char* key, const ModifierBinding& b) {
-  uint8_t buf[4]; mbPack(buf, b);
-  p.putBytes(key, buf, 4);
+static void bindingUnpack(const uint8_t* in, Binding& b) {
+  b.trigger = in[0]; b.trigger_key = in[1];
+  b.cmd = in[2] ? 1 : 0; b.opt = in[3] ? 1 : 0; b.ctrl = in[4] ? 1 : 0; b.shift = in[5] ? 1 : 0;
+  b.action = in[6];
 }
 
 void loadConfig() {
   Preferences prefs;
   prefs.begin("kb", true);
-  loadBinding   (prefs, "ctrl_b", g_config.ctrl_tap, DEFAULT_PRESET.ctrl_tap);
-  loadBinding   (prefs, "opt_b",  g_config.opt_tap,  DEFAULT_PRESET.opt_tap);
-  loadBinding   (prefs, "fn_b",   g_config.fn_tap,   DEFAULT_PRESET.fn_tap);
-  loadBinding   (prefs, "bt_b",   g_config.backtick, DEFAULT_PRESET.backtick);
-  loadModBinding(prefs, "num_b",  g_config.num_keys, DEFAULT_PRESET.num_keys);
+  // 新 schema："binds" key 存 binary blob：1 字节 count + count*BIND_BYTES
+  uint8_t buf[1 + MAX_BINDINGS * BIND_BYTES];
+  size_t n = prefs.getBytes("binds", buf, sizeof(buf));
+  if (n >= 1 && buf[0] <= MAX_BINDINGS && n == 1 + buf[0] * BIND_BYTES) {
+    g_config.count = buf[0];
+    for (int i = 0; i < g_config.count; i++) {
+      bindingUnpack(buf + 1 + i * BIND_BYTES, g_config.bindings[i]);
+    }
+  } else {
+    g_config = PRESET_XYB_DEFAULT;
+  }
   g_wifiSsid = prefs.getString("ssid", "");
   g_wifiPass = prefs.getString("pass", "");
   prefs.end();
@@ -1001,11 +1020,12 @@ void loadConfig() {
 void saveConfig() {
   Preferences prefs;
   prefs.begin("kb", false);
-  saveBinding   (prefs, "ctrl_b", g_config.ctrl_tap);
-  saveBinding   (prefs, "opt_b",  g_config.opt_tap);
-  saveBinding   (prefs, "fn_b",   g_config.fn_tap);
-  saveBinding   (prefs, "bt_b",   g_config.backtick);
-  saveModBinding(prefs, "num_b",  g_config.num_keys);
+  uint8_t buf[1 + MAX_BINDINGS * BIND_BYTES];
+  buf[0] = g_config.count;
+  for (int i = 0; i < g_config.count; i++) {
+    bindingPack(buf + 1 + i * BIND_BYTES, g_config.bindings[i]);
+  }
+  prefs.putBytes("binds", buf, 1 + g_config.count * BIND_BYTES);
   prefs.end();
 }
 void saveWifi(const String& ssid, const String& pass) {
@@ -1139,16 +1159,15 @@ static const char* akName(uint8_t a) {
 }
 
 // 通用执行器：按 binding 发出按键序列
-static void executeBinding(const ActionBinding& b, uint16_t flashColor) {
-  if (b.action == AK_NONE && !b.cmd && !b.opt && !b.ctrl && !b.shift) return;
-
-  // 特殊：CapsLock 切换需要更新 capsLocked 状态
+static void executeBinding(const Binding& b, uint16_t flashColor) {
+  // CapsLock 单按特殊处理
   if (b.action == AK_CAPS_LOCK && !b.cmd && !b.opt && !b.ctrl && !b.shift) {
     capsLocked = !capsLocked;
     bleKeyboard.write(KEY_CAPS_LOCK);
     showFlash(capsLocked ? "CAPS ON" : "caps off", TFT_YELLOW);
     return;
   }
+  if (b.action == AK_NONE && !b.cmd && !b.opt && !b.ctrl && !b.shift) return;
 
   if (b.cmd)   bleKeyboard.press(KEY_LEFT_GUI);
   if (b.opt)   bleKeyboard.press(KEY_LEFT_ALT);
@@ -1168,8 +1187,8 @@ static void executeBinding(const ActionBinding& b, uint16_t flashColor) {
   showFlash(label, flashColor);
 }
 
-// 数字键专用：modifier + 当前按下的数字字符
-static void executeNumKey(const ModifierBinding& b, char digit) {
+// 数字范围 binding：modifiers + 触发的数字字符
+static void executeNumBinding(const Binding& b, char digit) {
   if (b.cmd)   bleKeyboard.press(KEY_LEFT_GUI);
   if (b.opt)   bleKeyboard.press(KEY_LEFT_ALT);
   if (b.ctrl)  bleKeyboard.press(KEY_LEFT_CTRL);
@@ -1183,11 +1202,46 @@ static void executeNumKey(const ModifierBinding& b, char digit) {
   showFlash(label, COL_KEY_NUM);
 }
 
-void doCtrlTap()        { executeBinding(g_config.ctrl_tap, COL_KEY_FN); }
-void doOptTap()         { executeBinding(g_config.opt_tap,  TFT_YELLOW); }
-void doFnTap()          { executeBinding(g_config.fn_tap,   COL_KEY_ENT); }
-void doBacktick()       { executeBinding(g_config.backtick, COL_KEY_ESC); }
-void doNumberKey(char c){ executeNumKey(g_config.num_keys, c); }
+// 在 g_config.bindings 里查找指定 trigger 的 binding（找到第一个）
+static const Binding* findBinding(uint8_t trigger, uint8_t trigger_key = 0) {
+  for (int i = 0; i < g_config.count; i++) {
+    const Binding& b = g_config.bindings[i];
+    if (b.trigger != trigger) continue;
+    if (trigger == TK_KEY && b.trigger_key != trigger_key) continue;
+    return &b;
+  }
+  return nullptr;
+}
+
+void doCtrlTap() {
+  const Binding* b = findBinding(TK_CTRL_TAP);
+  if (b) executeBinding(*b, COL_KEY_FN);
+}
+void doOptTap() {
+  const Binding* b = findBinding(TK_OPT_TAP);
+  if (b) executeBinding(*b, TFT_YELLOW);
+}
+void doFnTap() {
+  const Binding* b = findBinding(TK_FN_TAP);
+  if (b) executeBinding(*b, COL_KEY_ENT);
+}
+// 任意字符键的处理（在 normal mode 没有别的 layer 干预时）
+// 返回 true = 已被某 binding 消费；false = 应该走默认透传
+bool dispatchKeyTap(char c) {
+  // 数字 1-8：先看是否有 num_range binding；找到就走它
+  if (c >= '1' && c <= '8') {
+    const Binding* nb = findBinding(TK_NUM_RANGE);
+    if (nb) { executeNumBinding(*nb, c); return true; }
+  }
+  // 普通按键：找 TK_KEY 类型 + trigger_key 匹配
+  const Binding* b = findBinding(TK_KEY, (uint8_t)c);
+  if (b) {
+    uint16_t color = (c == '`') ? COL_KEY_ESC : COL_KEY_NUM;
+    executeBinding(*b, color);
+    return true;
+  }
+  return false;
+}
 
 // AK 动作键的 dropdown 选项分组
 struct AkOption { uint8_t ak; const char* label; };
@@ -1241,37 +1295,122 @@ static String htmlAkSelect(const char* name, uint8_t curr) {
   return s;
 }
 
-// 渲染一个 ActionBinding 的一行：4 个 mod checkbox + 1 个 AK dropdown
-static String htmlBindingRow(const char* prefix, const char* triggerLabel, const ActionBinding& b) {
-  String s = "<tr><td>";
-  s += triggerLabel;
-  s += "</td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_cmd' value='1'";
-  if (b.cmd) s += " checked"; s += "></td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_opt' value='1'";
-  if (b.opt) s += " checked"; s += "></td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_ctrl' value='1'";
-  if (b.ctrl) s += " checked"; s += "></td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_shift' value='1'";
-  if (b.shift) s += " checked"; s += "></td>";
-  s += "<td>"; s += htmlAkSelect((String(prefix) + "_act").c_str(), b.action); s += "</td>";
-  s += "</tr>";
+// 把 binding 序列化成 JSON 对象（用于 GET /api/config 和 GET /api/presets）
+static int bindingJsonInto(char* buf, int n, const Binding& b) {
+  return snprintf(buf, n,
+    "{\"trigger\":%u,\"key\":%u,\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u}",
+    b.trigger, b.trigger_key, b.cmd, b.opt, b.ctrl, b.shift, b.action);
+}
+static String configJson(const KbConfig& c) {
+  String s = "[";
+  char buf[128];
+  for (int i = 0; i < c.count; i++) {
+    if (i > 0) s += ",";
+    bindingJsonInto(buf, sizeof(buf), c.bindings[i]);
+    s += buf;
+  }
+  s += "]";
   return s;
 }
-// 数字键：只 4 个 mod checkbox
-static String htmlNumRow(const char* prefix, const ModifierBinding& b) {
-  String s = "<tr><td>数字 1-8</td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_cmd' value='1'";
-  if (b.cmd) s += " checked"; s += "></td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_opt' value='1'";
-  if (b.opt) s += " checked"; s += "></td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_ctrl' value='1'";
-  if (b.ctrl) s += " checked"; s += "></td>";
-  s += "<td><input type='checkbox' name='"; s += prefix; s += "_shift' value='1'";
-  if (b.shift) s += " checked"; s += "></td>";
-  s += "<td><i>= 触发的数字</i></td></tr>";
-  return s;
-}
+
+const char JS_CODE[] =
+"function akSelectHtml(curr){"
+"let h=\"<select class='b-act'>\";"
+"for(const grp of AK_OPTS){"
+"h+=`<optgroup label='${grp.g}'>`;"
+"for(const [v,l] of grp.o) h+=`<option value='${v}' ${v==curr?'selected':''}>${l}</option>`;"
+"h+=\"</optgroup>\";"
+"}"
+"return h+\"</select>\";"
+"}"
+"function trigSelectHtml(curr,key){"
+"let h=\"<select class='b-trig' onchange='trigChanged(this)'>\";"
+"for(const v in TRIGGERS) h+=`<option value='${v}' ${v==curr?'selected':''}>${TRIGGERS[v]}</option>`;"
+"h+=\"</select>\";"
+"const ch=key?String.fromCharCode(key):\"\";"
+"h+=`<input type='text' class='b-key' maxlength='1' value='${ch}' style='display:${curr==4?'inline':'none'}' placeholder='键'>`;"
+"return h;"
+"}"
+"function trigChanged(sel){"
+"const inp=sel.parentElement.querySelector('.b-key');"
+"inp.style.display=sel.value=='4'?'inline':'none';"
+"}"
+"function rowHtml(b){"
+"b=b||{trigger:1,key:0,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
+"const isNum=b.trigger==5;"
+"return `<div class='bind-row'>"
+"<div class='trig'>${trigSelectHtml(b.trigger,b.key)}</div>"
+"<input type='checkbox' class='b-cmd' ${b.cmd?'checked':''}>"
+"<input type='checkbox' class='b-opt' ${b.opt?'checked':''}>"
+"<input type='checkbox' class='b-ctrl' ${b.ctrl?'checked':''}>"
+"<input type='checkbox' class='b-shift' ${b.shift?'checked':''}>"
+"${isNum?\"<i style='font-size:.85em'>= 触发数字</i>\":akSelectHtml(b.action)}"
+"<button type='button' class='del' onclick='this.closest(\".bind-row\").remove()'>删</button>"
+"</div>`;"
+"}"
+"function addRow(b){"
+"const wrap=document.getElementById('binds');"
+"const tmp=document.createElement('div');"
+"tmp.innerHTML=rowHtml(b);"
+"wrap.appendChild(tmp.firstElementChild);"
+"}"
+"function clearRows(){document.getElementById('binds').innerHTML=\"\"}"
+"function loadBindings(arr){clearRows();arr.forEach(addRow)}"
+"function collectBindings(){"
+"const rows=document.querySelectorAll('.bind-row');"
+"const out=[];"
+"for(const r of rows){"
+"const trig=parseInt(r.querySelector('.b-trig').value);"
+"const keyInp=r.querySelector('.b-key');"
+"const ka=r.querySelector('.b-act');"
+"out.push({"
+"trigger:trig,"
+"key:trig==4?(keyInp.value.charCodeAt(0)||0):0,"
+"cmd:r.querySelector('.b-cmd').checked?1:0,"
+"opt:r.querySelector('.b-opt').checked?1:0,"
+"ctrl:r.querySelector('.b-ctrl').checked?1:0,"
+"shift:r.querySelector('.b-shift').checked?1:0,"
+"action:ka?parseInt(ka.value):0"
+"});"
+"}"
+"return out;"
+"}"
+"async function loadPreset(name){"
+"if(!name)return;"
+"const r=await fetch('/api/presets');const presets=await r.json();"
+"const p=presets.find(x=>x.name===name);"
+"if(p)loadBindings(p.bindings);"
+"}"
+"async function init(){"
+"const r=await fetch('/api/config');const cfg=await r.json();"
+"loadBindings(cfg.bindings);"
+"const pr=await fetch('/api/presets');const presets=await pr.json();"
+"const sel=document.getElementById('preset');"
+"for(const p of presets){"
+"const o=document.createElement('option');o.value=p.name;o.textContent=p.name;sel.appendChild(o);"
+"}"
+"}"
+"async function saveAll(){"
+"const data={"
+"ssid:document.getElementById('ssid').value,"
+"pass:document.getElementById('pass').value,"
+"bindings:collectBindings()"
+"};"
+"const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});"
+"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>已保存，正在重启…</h2>\";"
+"}"
+"async function cancelAll(){"
+"await fetch('/cancel',{method:'POST'});"
+"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>正在重启…</h2>\";"
+"}"
+"async function scanWifi(){"
+"const el=document.getElementById('wifi-list');el.textContent='扫描中…';"
+"try{const r=await fetch('/api/wifi/scan');const nets=await r.json();"
+"if(!nets.length){el.textContent='没找到 WiFi';return}"
+"el.innerHTML=nets.map(n=>`<a href='#' onclick=\"document.getElementById('ssid').value='${n.ssid.replace(/'/g,\\\"\\\\'\\\")}';document.getElementById('pass').focus();return false\">${n.ssid} <span style='color:#888'>(${n.rssi}dBm${n.enc?' 🔒':''})</span></a>`).join('')"
+"}catch(e){el.textContent='扫描失败：'+e}"
+"}"
+"init();";
 
 void handleRoot() {
   String body = "<!DOCTYPE html><html><head><meta charset='utf-8'>";
@@ -1314,102 +1453,188 @@ void handleRoot() {
     body += " dBm）。</div>";
   }
 
-  body += "<form method='POST' action='/save'>";
+  body += ".bind-wrap{margin-top:.5em}";
+  body += ".bind-row{display:grid;grid-template-columns:1fr auto auto auto auto auto auto;gap:.4em;align-items:center;padding:.4em 0;border-bottom:1px solid #eee}";
+  body += ".bind-row label{margin:0;font-size:.85em;font-weight:400;text-align:center}";
+  body += ".bind-row input[type=checkbox]{transform:scale(1.2)}";
+  body += ".bind-row select,.bind-row input[type=text]{font-size:.9em;padding:.3em}";
+  body += ".bind-row .trig{display:flex;gap:.3em;align-items:center}";
+  body += ".bind-row .trig select{min-width:6em}";
+  body += ".bind-row .trig input{width:3em}";
+  body += ".bind-row .del{background:#fee;color:#c00;border:1px solid #fcc;border-radius:4px;cursor:pointer;padding:.3em .6em;font-size:.85em}";
+  body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
+  body += "</style></head><body>";
+  body += "<h2>CardPuter Keyboard 配置</h2>";
+
+  // 顶部状态横幅
+  body += "[BANNER]";  // 占位，下面按模式替换
+
+  body += "<fieldset><legend>预设方案（一键载入到下方表单）</legend>";
+  body += "<select id='preset' onchange='loadPreset(this.value)'>";
+  body += "<option value=''>-- 选择预设 --</option>";
+  body += "</select>";
+  body += "</fieldset>";
 
   body += "<fieldset><legend>WiFi（连家庭网络）</legend>";
-  body += "<label>SSID</label><input name='ssid' id='ssid' value='";
+  body += "<label>SSID</label><input id='ssid' value='";
   body += g_wifiSsid;
   body += "'>";
-  body += "<label>密码</label><input name='pass' id='pass' type='password' placeholder='";
+  body += "<label>密码</label><input id='pass' type='password' placeholder='";
   body += g_wifiPass.length() > 0 ? "(已存，留空保留)" : "";
   body += "'>";
   body += "<button type='button' class='scan' onclick='scanWifi()'>扫描附近 WiFi</button>";
   body += "<div id='wifi-list'></div>";
   body += "</fieldset>";
 
-  body += "<fieldset><legend>键映射（修饰键自由组合 + 任意主键）</legend>";
-  body += "<table class='bindings'>";
-  body += "<thead><tr><th>触发</th><th>Cmd</th><th>Opt</th><th>Ctrl</th><th>Shift</th><th>主键</th></tr></thead><tbody>";
-  body += htmlBindingRow("ctrl", "Ctrl 单按", g_config.ctrl_tap);
-  body += htmlBindingRow("opt",  "Opt 单按",  g_config.opt_tap);
-  body += htmlBindingRow("fn",   "Fn 单按",   g_config.fn_tap);
-  body += htmlBindingRow("bt",   "反引号 `",  g_config.backtick);
-  body += htmlNumRow    ("num",                g_config.num_keys);
-  body += "</tbody></table>";
+  body += "<fieldset><legend>键映射（每行 = 一条触发→动作）</legend>";
+  body += "<div class='bind-header' style='display:grid;grid-template-columns:1fr auto auto auto auto auto auto;gap:.4em;font-size:.8em;color:#666;padding-bottom:.4em;border-bottom:1px solid #ccc'>";
+  body += "<div>触发</div><div>Cmd</div><div>Opt</div><div>Ctrl</div><div>Shift</div><div>主键</div><div></div></div>";
+  body += "<div id='binds' class='bind-wrap'></div>";
+  body += "<button type='button' class='add-btn' onclick='addRow()'>+ 增加映射</button>";
   body += "</fieldset>";
 
-  body += "<button class='save' type='submit'>保存并重启</button>";
-  body += "</form>";
-  body += "<form method='POST' action='/cancel'>";
-  body += "<button class='reboot' type='submit'>放弃 / 直接重启</button>";
-  body += "</form>";
+  body += "<button class='save' type='button' onclick='saveAll()'>保存并重启</button>";
+  body += "<button class='reboot' type='button' onclick='cancelAll()'>放弃 / 直接重启</button>";
 
+  // banner
+  String banner;
+  if (g_apMode) {
+    banner = "<div class='banner banner-ap'>当前 <b>AP 模式</b>。在下面填家庭 WiFi 保存后会切到 STA 模式，AP 会消失。</div>";
+  } else {
+    banner = "<div class='banner banner-sta'>当前 <b>STA 模式</b>，已连 <b>" + g_wifiSsid +
+             "</b>（IP <code>" + g_staIp + "</code>，RSSI " + String(WiFi.RSSI()) + " dBm）。</div>";
+  }
+  body.replace("[BANNER]", banner);
+
+  // ===== JS =====
   body += "<script>";
-  body += "async function scanWifi(){";
-  body += "const el=document.getElementById('wifi-list');el.textContent='扫描中…';";
-  body += "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();";
-  body += "if(!nets.length){el.textContent='没找到 WiFi';return}";
-  body += "el.innerHTML=nets.map(n=>`<a href='#' onclick=\"pickSsid('${n.ssid.replace(/\"/g,'&quot;')}');return false\">${n.ssid} <span style='color:#888'>(${n.rssi}dBm${n.enc?' 🔒':''})</span></a>`).join('')";
-  body += "}catch(e){el.textContent='扫描失败：'+e}}";
-  body += "function pickSsid(s){document.getElementById('ssid').value=s;document.getElementById('pass').focus()}";
-  body += "</script>";
 
-  body += "</body></html>";
+  // AK 主键 dropdown 的选项数据（C++ 序列化成 JS 数组）
+  body += "const AK_OPTS=[";
+  body += "{g:'特殊键',o:[";
+  for (size_t i = 0; i < sizeof(AK_OPTIONS_SPECIAL)/sizeof(AK_OPTIONS_SPECIAL[0]); i++) {
+    if (i) body += ",";
+    body += "[" + String(AK_OPTIONS_SPECIAL[i].ak) + ",'" + AK_OPTIONS_SPECIAL[i].label + "']";
+  }
+  body += "]},";
+  body += "{g:'功能键',o:[";
+  for (size_t i = 0; i < sizeof(AK_OPTIONS_FN)/sizeof(AK_OPTIONS_FN[0]); i++) {
+    if (i) body += ",";
+    body += "[" + String(AK_OPTIONS_FN[i].ak) + ",'" + AK_OPTIONS_FN[i].label + "']";
+  }
+  body += "]},";
+  body += "{g:'字母 a-z',o:[";
+  for (uint8_t a = AK_A; a <= AK_Z; a++) {
+    if (a > AK_A) body += ",";
+    body += "[" + String(a) + ",'" + (char)('a' + (a - AK_A)) + "']";
+  }
+  body += "]},";
+  body += "{g:'数字 0-9',o:[";
+  for (uint8_t a = AK_0; a <= AK_9; a++) {
+    if (a > AK_0) body += ",";
+    body += "[" + String(a) + ",'" + (char)('0' + (a - AK_0)) + "']";
+  }
+  body += "]},";
+  body += "{g:'符号',o:[";
+  for (uint8_t a = AK_BACKTICK; a <= AK_SLASH; a++) {
+    if (a > AK_BACKTICK) body += ",";
+    body += "[" + String(a) + ",'" + akName(a) + "']";
+  }
+  body += "]}];";
+
+  body += "const TRIGGERS={1:'Ctrl 单按',2:'Opt 单按',3:'Fn 单按',4:'特定键',5:'数字 1-8'};";
+
+  // 渲染一行 binding（addRow 调用，row 是 binding 对象）
+  body += JS_CODE;
+  body += "</script></body></html>";
   g_web->send(200, "text/html; charset=utf-8", body);
 }
 
-// 表单 → ActionBinding 解析
-static void parseBinding(const char* prefix, ActionBinding& b) {
-  String pCmd = String(prefix) + "_cmd";
-  String pOpt = String(prefix) + "_opt";
-  String pCtrl = String(prefix) + "_ctrl";
-  String pShift = String(prefix) + "_shift";
-  String pAct = String(prefix) + "_act";
-  b.cmd   = g_web->hasArg(pCmd.c_str())   ? 1 : 0;
-  b.opt   = g_web->hasArg(pOpt.c_str())   ? 1 : 0;
-  b.ctrl  = g_web->hasArg(pCtrl.c_str())  ? 1 : 0;
-  b.shift = g_web->hasArg(pShift.c_str()) ? 1 : 0;
-  if (g_web->hasArg(pAct.c_str())) b.action = g_web->arg(pAct.c_str()).toInt();
+// /api/config — 当前配置 JSON
+void handleApiConfig() {
+  String s = "{\"bindings\":";
+  s += configJson(g_config);
+  s += "}";
+  g_web->send(200, "application/json", s);
 }
-static void parseModBinding(const char* prefix, ModifierBinding& b) {
-  String pCmd = String(prefix) + "_cmd";
-  String pOpt = String(prefix) + "_opt";
-  String pCtrl = String(prefix) + "_ctrl";
-  String pShift = String(prefix) + "_shift";
-  b.cmd   = g_web->hasArg(pCmd.c_str())   ? 1 : 0;
-  b.opt   = g_web->hasArg(pOpt.c_str())   ? 1 : 0;
-  b.ctrl  = g_web->hasArg(pCtrl.c_str())  ? 1 : 0;
-  b.shift = g_web->hasArg(pShift.c_str()) ? 1 : 0;
+
+// /api/presets — 内置预设列表
+void handleApiPresets() {
+  String s = "[";
+  for (int i = 0; i < PRESET_COUNT; i++) {
+    if (i) s += ",";
+    s += "{\"name\":\""; s += PRESETS[i].name; s += "\",\"bindings\":";
+    s += configJson(*PRESETS[i].cfg);
+    s += "}";
+  }
+  s += "]";
+  g_web->send(200, "application/json", s);
+}
+
+// 极简 JSON 解析 helper：找 "key":数字 / "key":"值"
+static int jsonFindInt(const String& body, const String& key, int def = 0) {
+  String pat = "\"" + key + "\":";
+  int p = body.indexOf(pat);
+  if (p < 0) return def;
+  return body.substring(p + pat.length()).toInt();
+}
+static String jsonFindStr(const String& body, const String& key) {
+  String pat = "\"" + key + "\":\"";
+  int p = body.indexOf(pat);
+  if (p < 0) return "";
+  int start = p + pat.length();
+  int end = body.indexOf('"', start);
+  if (end < 0) return "";
+  return body.substring(start, end);
 }
 
 void handleSave() {
-  // 键映射 binding
-  parseBinding   ("ctrl", g_config.ctrl_tap);
-  parseBinding   ("opt",  g_config.opt_tap);
-  parseBinding   ("fn",   g_config.fn_tap);
-  parseBinding   ("bt",   g_config.backtick);
-  parseModBinding("num",  g_config.num_keys);
-  saveConfig();
-
-  // WiFi creds（密码留空 = 保留旧密码；非空 = 覆盖）
-  bool wifiChanged = false;
-  if (g_web->hasArg("ssid")) {
-    String newSsid = g_web->arg("ssid");
-    String newPass = g_web->hasArg("pass") ? g_web->arg("pass") : String("");
-    // 空密码视为保留
-    if (newPass.length() == 0) newPass = g_wifiPass;
-    if (newSsid != g_wifiSsid || newPass != g_wifiPass) {
-      saveWifi(newSsid, newPass);
-      wifiChanged = true;
-    }
+  // POST body 必为 JSON {ssid, pass, bindings:[...]}
+  String body = g_web->arg("plain");
+  if (body.length() == 0) {
+    g_web->send(400, "text/plain", "expected JSON body"); return;
   }
 
-  // WiFi 改了 → 重启再次进配置模式（让用户看到新 STA 是否能连上）
-  // 没改 → 重启回正常模式
+  // 解析 bindings 数组
+  int bArrStart = body.indexOf("\"bindings\":[");
+  if (bArrStart < 0) {
+    g_web->send(400, "text/plain", "missing bindings"); return;
+  }
+  int p = bArrStart + 12;  // 跳过 "bindings":[
+  int count = 0;
+  while (p < (int)body.length() && count < MAX_BINDINGS) {
+    int objStart = body.indexOf('{', p);
+    if (objStart < 0) break;
+    int objEnd = body.indexOf('}', objStart);
+    if (objEnd < 0) break;
+    String obj = body.substring(objStart, objEnd + 1);
+    Binding& b = g_config.bindings[count];
+    b.trigger     = jsonFindInt(obj, "trigger", 0);
+    b.trigger_key = jsonFindInt(obj, "key", 0);
+    b.cmd         = jsonFindInt(obj, "cmd", 0)   ? 1 : 0;
+    b.opt         = jsonFindInt(obj, "opt", 0)   ? 1 : 0;
+    b.ctrl        = jsonFindInt(obj, "ctrl", 0)  ? 1 : 0;
+    b.shift       = jsonFindInt(obj, "shift", 0) ? 1 : 0;
+    b.action      = jsonFindInt(obj, "action", 0);
+    if (b.trigger != TK_NONE) count++;
+    p = objEnd + 1;
+    if (body[p] == ']') break;
+  }
+  g_config.count = count;
+  saveConfig();
+
+  // WiFi creds
+  String newSsid = jsonFindStr(body, "ssid");
+  String newPass = jsonFindStr(body, "pass");
+  if (newPass.length() == 0) newPass = g_wifiPass;
+  bool wifiChanged = false;
+  if (newSsid.length() > 0 && (newSsid != g_wifiSsid || newPass != g_wifiPass)) {
+    saveWifi(newSsid, newPass);
+    wifiChanged = true;
+  }
+
   if (wifiChanged) requestConfigBoot();
-  g_web->send(200, "text/html; charset=utf-8",
-              "<html><body style='font-family:system-ui;text-align:center;margin-top:3em'>"
-              "<h2>已保存，正在重启…</h2></body></html>");
+  g_web->send(200, "application/json", "{\"ok\":true}");
   delay(500);
   esp_restart();
 }
@@ -1464,16 +1689,6 @@ void drawConfigScreen(const char* status, const String& ip) {
 }
 
 // /api/status — JSON 健康状态
-// 一次性写入 fixed buffer，避免 String 拼接 / chunked 编码 curl 兼容问题
-static int abJsonInto(char* buf, int n, const ActionBinding& b) {
-  return snprintf(buf, n, "{\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u}",
-                  b.cmd, b.opt, b.ctrl, b.shift, b.action);
-}
-static int mbJsonInto(char* buf, int n, const ModifierBinding& b) {
-  return snprintf(buf, n, "{\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u}",
-                  b.cmd, b.opt, b.ctrl, b.shift);
-}
-
 void handleStatus() {
   int rssi = WiFi.RSSI();
   unsigned long uptime = millis() / 1000;
@@ -1482,25 +1697,13 @@ void handleStatus() {
   const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
   const char* ip   = g_apMode ? g_apIp.c_str() : g_staIp.c_str();
 
-  static char buf[1024];
-  int p = 0;
-  p += snprintf(buf + p, sizeof(buf) - p,
+  static char buf[256];
+  snprintf(buf, sizeof(buf),
     "{\"mode\":\"%s\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
-    "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,\"cfg\":{\"ctrl\":",
-    mode, ssid, ip, rssi, MDNS_NAME, uptime, bat);
-  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.ctrl_tap);
-  p += snprintf(buf + p, sizeof(buf) - p, ",\"opt\":");
-  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.opt_tap);
-  p += snprintf(buf + p, sizeof(buf) - p, ",\"fn\":");
-  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.fn_tap);
-  p += snprintf(buf + p, sizeof(buf) - p, ",\"bt\":");
-  p += abJsonInto(buf + p, sizeof(buf) - p, g_config.backtick);
-  p += snprintf(buf + p, sizeof(buf) - p, ",\"num\":");
-  p += mbJsonInto(buf + p, sizeof(buf) - p, g_config.num_keys);
-  p += snprintf(buf + p, sizeof(buf) - p,
-    "},\"stored_ssid\":\"%s\",\"heap_free\":%u}",
-    g_wifiSsid.c_str(), (unsigned)ESP.getFreeHeap());
-
+    "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,"
+    "\"binding_count\":%u,\"stored_ssid\":\"%s\",\"heap_free\":%u}",
+    mode, ssid, ip, rssi, MDNS_NAME, uptime, bat,
+    g_config.count, g_wifiSsid.c_str(), (unsigned)ESP.getFreeHeap());
   g_web->send(200, "application/json", String(buf));
 }
 
@@ -1571,6 +1774,8 @@ static void registerWebRoutes() {
   g_web->on("/save",            HTTP_POST, handleSave);
   g_web->on("/cancel",          HTTP_POST, handleCancel);
   g_web->on("/api/status",      HTTP_GET,  handleStatus);
+  g_web->on("/api/config",      HTTP_GET,  handleApiConfig);
+  g_web->on("/api/presets",     HTTP_GET,  handleApiPresets);
   g_web->on("/api/screenshot",  HTTP_GET,  handleScreenshot);
   g_web->on("/api/wifi/scan",   HTTP_GET,  handleWifiScan);
   g_web->on("/api/reboot",      HTTP_POST, handleCancel);
@@ -1970,18 +2175,9 @@ void loop() {
           bleKeyboard.press(key);
           bleKeyboard.releaseAll();
         } else {
-          // Normal mode (shift already applied by library for characters)
-          switch (c) {
-            case '1': case '2': case '3': case '4': case '5':
-            case '6': case '7': case '8':
-              doNumberKey(c);
-              break;
-            case '`':
-              doBacktick();
-              break;
-            default:
-              bleKeyboard.write(c);
-              break;
+          // Normal mode：按 binding 列表查映射，没找到就字面透传
+          if (!dispatchKeyTap(c)) {
+            bleKeyboard.write(c);
           }
         }
       }
