@@ -1284,6 +1284,7 @@ void setup() {
 void loop() {
 #if IS_CARDPUTER
   // 远程触发：BLE 回调里检测到 host 反复切 Caps Lock 后置标志，main loop 这里执行重启
+  // （注意：xyb 的 Mac 把 Caps Lock 改成了 IME 切换，BLE 路径暂时无效，靠下面 USB 串口）
   if (g_remote_trigger_fired) {
     M5Cardputer.Display.fillScreen(BLACK);
     M5Cardputer.Display.setTextColor(TFT_YELLOW, BLACK);
@@ -1293,6 +1294,24 @@ void loop() {
     delay(800);
     requestConfigBoot();
     esp_restart();
+  }
+  // 开发期备用触发：USB 串口收到 "config\n" 进配置模式
+  static char serialBuf[16];
+  static uint8_t serialIdx = 0;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      serialBuf[serialIdx] = 0;
+      if (strcmp(serialBuf, "config") == 0) {
+        Serial.println("[trigger] serial 'config' received");
+        requestConfigBoot();
+        delay(50);
+        esp_restart();
+      }
+      serialIdx = 0;
+    } else if (serialIdx < sizeof(serialBuf) - 1) {
+      serialBuf[serialIdx++] = c;
+    }
   }
   if (g_config_mode) {
     configModeLoop();
