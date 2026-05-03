@@ -221,27 +221,29 @@ const KbConfig PRESET_LAZYTYPER = {
   12
 };
 
-// 预设 profile：Wispr Flow（语音输入 app）。只重映射 modifier+backtick，
-// 数字键如果用户已配置就保留（merge 加载，不会抹掉）。
+// 预设 profile：Wispr Flow（语音输入 app）。
+// Wispr Flow 默认 hotkey 是 Fn（macOS 私有 modifier，BLE HID 发不出真 Fn）。
+// 这里 Ctrl 单击发 CapsLock；用户需在 Wispr Flow → Settings → Shortcuts
+// 把 hotkey 改成 Caps Lock toggle（press once start, press again stop）。
 const KbConfig PRESET_WISPRFLOW = {
   {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  1, 0, 0, 1, AK_SEMICOLON},  // Ctrl 单击→Cmd+Shift+;
-    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Ctrl 单击→CapsLock（Wispr toggle）
     {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},
     {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},
   },
-  4
+  3
 };
 
-// 预设 profile：GhostType（AI 输入助手）
+// 预设 profile：GhostType / Ghostly（macOS 本地 Whisper 听写）。
+// Ghostly 默认 hotkey 也是 Fn（同上理由发不出）。
+// 用户需在 Ghostly 设置里把 hotkey 改成 Caps Lock。
 const KbConfig PRESET_GHOSTTYPE = {
   {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  1, 1, 0, 0, AK_G},          // Ctrl 单击→Cmd+Opt+G（占位）
-    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Ctrl 单击→CapsLock（Ghostly toggle）
     {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},
     {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},
   },
-  4
+  3
 };
 
 // 预设 profile：纯透传（所有键直接发字面字符，无映射）
@@ -1434,16 +1436,23 @@ const char JS_CODE[] =
 "return h+\"</select>\";"
 "}"
 "function trigSelectHtml(curr,key){"
-"let h=\"<select class='b-trig' onchange='trigChanged(this)'>\";"
-"for(const v in TRIGGERS) h+=`<option value='${v}' ${v==curr?'selected':''}>${TRIGGERS[v]}</option>`;"
-"h+=\"</select>\";"
-"const ch=key?String.fromCharCode(key):\"\";"
-"h+=`<input type='text' class='b-key' maxlength='1' value='${ch}' style='display:${curr==4?'inline':'none'}' placeholder='键'>`;"
-"return h;"
+"let cur='';"
+"if(curr>=1&&curr<=3)cur='m'+curr;"
+"else if(curr==4&&key)cur='k'+key;"
+"let h=\"<select class='b-trig'>\";"
+"h+=\"<optgroup label='修饰键'>\";"
+"for(const [v,l] of [['m1','Ctrl'],['m2','Opt'],['m3','Fn']])"
+"h+=`<option value='${v}' ${cur==v?'selected':''}>${l}</option>`;"
+"h+=\"</optgroup>\";"
+"for(const grp of TRIG_KEY_OPTS){"
+"h+=`<optgroup label='${grp.g}'>`;"
+"for(const [code,l] of grp.o){"
+"const v='k'+code;"
+"h+=`<option value='${v}' ${cur==v?'selected':''}>${l}</option>`;"
 "}"
-"function trigChanged(sel){"
-"const inp=sel.parentElement.querySelector('.b-key');"
-"inp.style.display=sel.value=='4'?'inline':'none';"
+"h+=\"</optgroup>\";"
+"}"
+"return h+\"</select>\";"
 "}"
 "function eventSelectHtml(curr,longMs){"
 "let h=\"<select class='b-event' onchange='eventChanged(this)'>\";"
@@ -1459,7 +1468,7 @@ const char JS_CODE[] =
 "function rowHtml(b){"
 "b=b||{trigger:1,key:0,event:0,long_ms:500,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
 "return `<tr class='bind-row'>"
-"<td><div class='trig-cell'>${trigSelectHtml(b.trigger,b.key)}</div></td>"
+"<td>${trigSelectHtml(b.trigger,b.key)}</td>"
 "<td class='col-event'><div class='event-cell'>${eventSelectHtml(b.event,b.long_ms)}</div></td>"
 "<td class='col-mod'><input type='checkbox' class='b-cmd' ${b.cmd?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-opt' ${b.opt?'checked':''}></td>"
@@ -1481,14 +1490,16 @@ const char JS_CODE[] =
 "const rows=document.querySelectorAll('.bind-row');"
 "const out=[];"
 "for(const r of rows){"
-"const trig=parseInt(r.querySelector('.b-trig').value);"
-"const keyInp=r.querySelector('.b-key');"
+"const tv=r.querySelector('.b-trig').value;"
+"let trig=0,key=0;"
+"if(tv.startsWith('m')){trig=parseInt(tv.slice(1));}"
+"else if(tv.startsWith('k')){trig=4;key=parseInt(tv.slice(1));}"
 "const ev=parseInt(r.querySelector('.b-event').value);"
 "const longInp=r.querySelector('.b-longms');"
 "const ka=r.querySelector('.b-act');"
 "out.push({"
 "trigger:trig,"
-"key:trig==4?(keyInp.value.charCodeAt(0)||0):0,"
+"key:key,"
 "event:ev,"
 "long_ms:ev==3?(parseInt(longInp.value)||500):0,"
 "cmd:r.querySelector('.b-cmd').checked?1:0,"
@@ -1597,9 +1608,6 @@ void handleRoot() {
   body += "table.bind-table .event-cell input.b-longms{width:3.5em;flex-shrink:0;display:none}";
   body += "table.bind-table input[type=checkbox]{transform:scale(1.2);margin:0}";
   body += "table.bind-table select,table.bind-table input[type=text]{font-size:.9em;padding:.3em;width:100%;box-sizing:border-box}";
-  body += "table.bind-table .trig-cell{display:flex;gap:.3em;align-items:center}";
-  body += "table.bind-table .trig-cell select{flex:1;min-width:0}";
-  body += "table.bind-table .trig-cell input.b-key{width:2.5em;flex-shrink:0}";
   body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:0;font-size:1.4em;line-height:1;color:#999;width:1.6em;height:1.6em;display:inline-flex;align-items:center;justify-content:center;border-radius:50%}";
   body += "table.bind-table .del:hover{background:#fee;color:#c00}";
   body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
@@ -1693,7 +1701,37 @@ void handleRoot() {
   }
   body += "]}];";
 
-  body += "const TRIGGERS={1:'Ctrl',2:'Opt',3:'Fn',4:'特定键'};";
+  // trigger 字面键选项：value 用 ASCII char code，label 用字符自身。
+  // 双引号包字符串以便 ' 和反斜杠等特殊字符不破 JS 字面量。
+  body += "const TRIG_KEY_OPTS=[";
+  body += "{g:'数字',o:[";
+  {
+    const char* row = "`1234567890-=";
+    for (const char* p = row; *p; p++) {
+      if (p != row) body += ",";
+      String esc;
+      if (*p == '\\' || *p == '"') esc += '\\';
+      esc += *p;
+      body += "[" + String((int)(uint8_t)*p) + ",\"" + esc + "\"]";
+    }
+  }
+  body += "]},{g:'字母',o:[";
+  for (char c = 'a'; c <= 'z'; c++) {
+    if (c != 'a') body += ",";
+    body += "[" + String((int)c) + ",\"" + c + "\"]";
+  }
+  body += "]},{g:'符号',o:[";
+  {
+    const char* row = ";',./[]\\";
+    for (const char* p = row; *p; p++) {
+      if (p != row) body += ",";
+      String esc;
+      if (*p == '\\' || *p == '"') esc += '\\';
+      esc += *p;
+      body += "[" + String((int)(uint8_t)*p) + ",\"" + esc + "\"]";
+    }
+  }
+  body += "]}];";
   body += "const EVENTS={0:'单击',1:'双击',2:'三击',3:'长按'};";
 
   // 渲染一行 binding（addRow 调用，row 是 binding 对象）
