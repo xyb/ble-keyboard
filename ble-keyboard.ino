@@ -225,18 +225,6 @@ const KbConfig PRESET_LAZYTYPER = {
   12
 };
 
-// 预设 profile：Wispr Flow（macOS 语音输入 app）。
-// 默认 hotkey 是 Fn+Space toggle（BLE HID 发不出真 Fn——macOS 私有 modifier）。
-// 解决：在 Wispr Flow → Settings → Shortcuts 把 hotkey 改成 Caps Lock toggle。
-const KbConfig PRESET_WISPRFLOW = {
-  {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK,  "默认 Fn+Space toggle；改 CapsLock 后用"},
-    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER,      "回车发送"},
-    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC,        "Esc：退出/取消"},
-  },
-  3
-};
-
 // 预设 profile：纯透传（所有键直接发字面字符，无映射）
 const KbConfig PRESET_PASSTHROUGH = {
   {},
@@ -248,7 +236,6 @@ const KbConfig& DEFAULT_PRESET = PRESET_LAZYTYPER;
 struct PresetEntry { const char* name; const KbConfig* cfg; };
 const PresetEntry PRESETS[] = {
   {"LazyTyper + iTerm2",  &PRESET_LAZYTYPER},
-  {"Wispr Flow",          &PRESET_WISPRFLOW},
   {"纯透传（无映射）",      &PRESET_PASSTHROUGH},
 };
 constexpr int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
@@ -1968,18 +1955,53 @@ void handleCancel() {
 
 // ===== 配置模式：STA 连家庭 WiFi（写死，仅试验用）=====
 #include <ESPmDNS.h>
+#include <esp_wifi.h>
 
 // 这些全局在 loadConfig 之前已声明（forward 顺序需要）
 
+// 画 AP 模式下客户端那行：等待 / 数量。两者都 size=2 大字（保证宽度不超出主区 240-22=218 px）。
+static void drawApClientLine() {
+  M5Cardputer.Display.fillRect(22, 70, SCREEN_W - 22, 18, BLACK);
+  int n = WiFi.softAPgetStationNum();
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setCursor(28, 70);
+  if (n == 0) {
+    M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
+    M5Cardputer.Display.print("Waiting client");  // 14 字符 × 12 = 168 px ≤ 218 可用
+  } else {
+    M5Cardputer.Display.setTextColor(0x07E0 /* green */, BLACK);
+    M5Cardputer.Display.printf("%d client%s", n, n > 1 ? "s" : "");  // 最长 "16 clients" = 120 px
+  }
+}
+
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
+
+  // 左侧装饰条：深紫底色 + 逆时针 90° 旋转的 "CONFIG"
+  const int barW = 22;
+  const uint16_t barBg = 0x4810; /* 深紫 RGB565 (72,0,128) #480080 */
+  M5Cardputer.Display.fillRect(0, 0, barW, SCREEN_H, barBg);
+  {
+    LGFX_Sprite sprite(&M5Cardputer.Display);
+    sprite.createSprite(80, 18);
+    sprite.fillSprite(barBg);
+    sprite.setTextSize(2);
+    sprite.setTextColor(0xFFFF, barBg);
+    sprite.setCursor(4, 1);
+    sprite.print("CONFIG");
+    sprite.setPivot(40, 9);
+    M5Cardputer.Display.setPivot(barW / 2, SCREEN_H / 2);
+    sprite.pushRotated(-90.0f);
+    sprite.deleteSprite();
+  }
+
   // 顶栏：模式 + SSID 合并为大字一行；颜色编码连接状态
   // STA 已连=绿；STA 连接中=黄+...；STA 失败=红；AP=橙
   M5Cardputer.Display.setTextSize(2);
   if (g_apMode) {
     // AP MODE 顶栏（橙色）
     M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
-    M5Cardputer.Display.setCursor(6, 4);
+    M5Cardputer.Display.setCursor(28, 4);
     M5Cardputer.Display.print("AP MODE");
   } else {
     bool connecting = (strstr(status, "Connect") != nullptr) && !g_staConnected;
@@ -1987,7 +2009,7 @@ void drawConfigScreen(const char* status, const String& ip) {
                     : connecting   ? 0xFFE0 /* yellow */
                                    : 0xF800 /* red */;
     M5Cardputer.Display.setTextColor(color, BLACK);
-    M5Cardputer.Display.setCursor(6, 4);
+    M5Cardputer.Display.setCursor(28, 4);
     char title[28];
     snprintf(title, sizeof(title), "STA %.13s%s",
              g_wifiSsid.c_str(),
@@ -2000,41 +2022,31 @@ void drawConfigScreen(const char* status, const String& ip) {
   if (g_apMode) {
     // AP: SSID + IP + 客户端状态
     M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
-    M5Cardputer.Display.setCursor(6, 24);
+    M5Cardputer.Display.setCursor(28, 24);
     M5Cardputer.Display.print(g_apSsidStr);  // CardPuter-KB-XXXX
     M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
-    M5Cardputer.Display.setCursor(6, 46);
+    M5Cardputer.Display.setCursor(28, 46);
     M5Cardputer.Display.print(ip);            // 192.168.4.1
-    // 客户端状态（小字）
-    M5Cardputer.Display.setTextSize(1);
-    int n = WiFi.softAPgetStationNum();
-    if (n == 0) {
-      M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
-      M5Cardputer.Display.setCursor(6, 70);
-      M5Cardputer.Display.print("Waiting for client...");
-    } else {
-      M5Cardputer.Display.setTextColor(0x07E0 /* green */, BLACK);
-      M5Cardputer.Display.setCursor(6, 70);
-      M5Cardputer.Display.printf("%d client%s connected", n, n > 1 ? "s" : "");
-    }
+    // 客户端状态：等待 / 唯一客户端 IP / 多客户端时给数量。size=2 跟主体齐平。
+    drawApClientLine();
   } else {
     // STA: IP + mDNS hostname + .local
     M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
-    M5Cardputer.Display.setCursor(6, 24);
+    M5Cardputer.Display.setCursor(28, 24);
     M5Cardputer.Display.print(ip);
     M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
-    M5Cardputer.Display.setCursor(6, 46);
+    M5Cardputer.Display.setCursor(28, 46);
     M5Cardputer.Display.print(MDNS_NAME);
-    M5Cardputer.Display.setCursor(6, 68);
+    M5Cardputer.Display.setCursor(28, 68);
     M5Cardputer.Display.print(".local");
   }
 
   // 底部：键盘提示（size=2，跟主体齐平大小）。STA 和 AP 都给两条提示。
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
-  M5Cardputer.Display.setCursor(6, 95);
+  M5Cardputer.Display.setCursor(28, 95);
   M5Cardputer.Display.print(g_apMode ? "[A] Swap STA Mode" : "[A] Swap AP Mode");
-  M5Cardputer.Display.setCursor(6, 115);
+  M5Cardputer.Display.setCursor(28, 115);
   M5Cardputer.Display.print("[Q] Exit to BLE");
 }
 
@@ -2229,47 +2241,47 @@ void configModeLoop() {
   }
 
   // 配置模式下读物理键盘：'a' 在两个模式下意义不同，'q' 退出回 BLE
+  // 重启前先画一个统一的"切换中"过渡屏，避免 GRAM 残留旧内容 + boot 黑屏的两次闪烁
   M5Cardputer.update();
   if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
     auto& keys = M5Cardputer.Keyboard.keysState();
+    auto drawTransition = [](const char* msg, uint16_t color) {
+      M5Cardputer.Display.fillScreen(BLACK);
+      M5Cardputer.Display.setTextSize(3);
+      M5Cardputer.Display.setTextColor(color, BLACK);
+      int tw = strlen(msg) * FONT3_W;
+      M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - FONT3_H) / 2);
+      M5Cardputer.Display.print(msg);
+    };
     for (auto c : keys.word) {
       if (c == 'a' || c == 'A') {
         Preferences prefs;
         prefs.begin("kb", false);
         if (g_apMode) {
-          // AP→STA: 不强制 force_ap，setupConfigMode 走 STA 优先（有 stored ssid 才能成功，否则会再次 AP fallback）
           prefs.remove("force_ap");
         } else {
-          // STA→AP: 设 force_ap
           prefs.putBool("force_ap", true);
         }
         prefs.end();
+        drawTransition(g_apMode ? "-> STA" : "-> AP", 0xFFE0);
         requestConfigBoot();
-        delay(100);
+        delay(400);
         esp_restart();
       } else if (c == 'q' || c == 'Q') {
-        delay(100);
+        drawTransition("-> BLE", 0x07FF);
+        delay(400);
         esp_restart();
       }
     }
   }
 
-  // AP 模式：每秒重绘客户端状态行（显示 stationNum 变化）
+  // AP 模式：每秒查 stationNum；变化时调 drawApClientLine 重画那行（含 IP）
   static unsigned long lastApRefresh = 0;
   static int lastStationNum = -1;
   if (g_apMode && millis() - lastApRefresh > 1000) {
     int n = WiFi.softAPgetStationNum();
     if (n != lastStationNum) {
-      M5Cardputer.Display.fillRect(0, 70, 240, 10, BLACK);
-      M5Cardputer.Display.setTextSize(1);
-      M5Cardputer.Display.setCursor(6, 70);
-      if (n == 0) {
-        M5Cardputer.Display.setTextColor(0xFFE0, BLACK);
-        M5Cardputer.Display.print("Waiting for client...");
-      } else {
-        M5Cardputer.Display.setTextColor(0x07E0, BLACK);
-        M5Cardputer.Display.printf("%d client%s connected", n, n > 1 ? "s" : "");
-      }
+      drawApClientLine();
       lastStationNum = n;
     }
     lastApRefresh = millis();
