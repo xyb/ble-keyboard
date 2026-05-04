@@ -1006,7 +1006,17 @@ void flashBtnA() {
 String g_wifiSsid = "";
 String g_wifiPass = "";
 String g_lastPreset = "";
-const char* MDNS_NAME = "cardputer-kb";  // 访问 http://cardputer-kb.local
+// 访问 http://cardputer-kb-XXXX.local，XXXX 是 MAC 后两字节 hex（多设备避免冲突）
+char g_mdnsName[24] = {0};
+static const char* mdnsName() {
+  if (g_mdnsName[0] == 0) {
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_BT);
+    snprintf(g_mdnsName, sizeof(g_mdnsName), "cardputer-kb-%02x%02x", mac[4], mac[5]);
+  }
+  return g_mdnsName;
+}
+#define MDNS_NAME mdnsName()
 const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就 fallback 到 AP
 unsigned long g_configEnterTime = 0;
 String g_staIp = "";
@@ -1617,6 +1627,12 @@ const char JS_CODE[] =
 "await fetch('/cancel',{method:'POST'});"
 "document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>正在重启…</h2>\";"
 "}"
+// 切到 AP 模式：服务端写 force_ap flag 后重启进 AP
+"async function switchToAp(){"
+"if(!confirm('设备会重启并进入 AP 模式。\\n下次进入配置模式时仍走 STA 优先。继续？'))return;"
+"await fetch('/api/switch-to-ap',{method:'POST'});"
+"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>正在切换到 AP 模式…<br><small>稍后请连 CardPuter-KB-CFG-XXXX 这个 WiFi 后访问 http://192.168.4.1/</small></h2>\";"
+"}"
 "async function scanWifi(){"
 "const el=document.getElementById('wifi-list');el.textContent='扫描中…';"
 "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();"
@@ -1663,6 +1679,9 @@ void handleRoot() {
   body += ".banner code{font-family:ui-monospace,monospace;background:rgba(0,0,0,.05);padding:.05em .3em;border-radius:3px}";
   body += ".banner-sta{background:#dcfce7;color:#166534;border:1px solid #86efac}";
   body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
+  body += ".banner small{opacity:.85;font-size:.85em}";
+  body += ".banner button.switch-mode{margin-top:.4em;background:#fff;color:#374151;border:1px solid #9ca3af;border-radius:4px;padding:.3em .8em;cursor:pointer;font-size:.85em}";
+  body += ".banner button.switch-mode:hover{background:#f3f4f6}";
   // 用 <table> 让 header 和 row 列宽自动对齐
   body += "table.bind-table{width:100%;border-collapse:collapse;margin-top:.5em}";
   body += "table.bind-table th{font-size:.8em;color:#666;font-weight:600;padding:.4em .2em;border-bottom:1px solid #ccc;text-align:center;white-space:nowrap}";
@@ -1739,10 +1758,15 @@ void handleRoot() {
   // banner
   String banner;
   if (g_apMode) {
-    banner = "<div class='banner banner-ap'>当前 <b>AP 模式</b>。在下面填家庭 WiFi 保存后会切到 STA 模式，AP 会消失。</div>";
+    banner = "<div class='banner banner-ap'><b>📡 AP 模式</b><br>"
+             "SSID <code>" + String(g_apSsidStr) + "</code>，连 AP 后访问 <code>http://" + g_apIp + "/</code><br>"
+             "<small>下面填家庭 WiFi 保存后会切到 STA 模式（AP 会消失）。</small></div>";
   } else {
-    banner = "<div class='banner banner-sta'>当前 <b>STA 模式</b>，已连 <b>" + g_wifiSsid +
-             "</b>（IP <code>" + g_staIp + "</code>，RSSI " + String(WiFi.RSSI()) + " dBm）。</div>";
+    banner = "<div class='banner banner-sta'><b>📶 STA 模式</b>，已连 <b>" + g_wifiSsid + "</b>"
+             "（信号 " + String(WiFi.RSSI()) + " dBm）<br>"
+             "🔗 <code>http://" + g_staIp + "/</code>"
+             " 或 <code>http://" + String(MDNS_NAME) + ".local/</code><br>"
+             "<button class='switch-mode' type='button' onclick='switchToAp()'>切换到 AP 模式（重启进入）</button></div>";
   }
   body.replace("[BANNER]", banner);
 
@@ -1949,38 +1973,46 @@ void handleCancel() {
 
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
-  M5Cardputer.Display.setTextColor(WHITE, BLACK);
+  // 顶栏：模式标志（大字，颜色区分 STA/AP）
   M5Cardputer.Display.setTextSize(2);
-  M5Cardputer.Display.setCursor(8, 4);
-  M5Cardputer.Display.print(g_apMode ? "AP Setup" : "WiFi Config");
+  M5Cardputer.Display.setTextColor(g_apMode ? 0xFD20 /* orange */ : 0x07E0 /* green */, BLACK);
+  M5Cardputer.Display.setCursor(6, 4);
+  M5Cardputer.Display.print(g_apMode ? "AP MODE" : "STA MODE");
 
+  // 右上角：SSID（小字，灰）
   M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setCursor(8, 32);
-  M5Cardputer.Display.print("SSID:   ");
-  M5Cardputer.Display.println(g_apMode ? g_apSsidStr : g_wifiSsid.c_str());
-  M5Cardputer.Display.setCursor(8, 48);
-  M5Cardputer.Display.print("Status: ");
-  M5Cardputer.Display.println(status);
-  M5Cardputer.Display.setCursor(8, 64);
-  M5Cardputer.Display.print("IP:     ");
-  M5Cardputer.Display.println(ip);
+  M5Cardputer.Display.setTextColor(0xC618, BLACK);
+  M5Cardputer.Display.setCursor(124, 8);
+  const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
+  M5Cardputer.Display.printf("SSID: %.14s", ssid);
+
+  // 主体：访问入口（最大字体，醒目）
+  M5Cardputer.Display.setTextSize(2);
+  M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
+  M5Cardputer.Display.setCursor(6, 24);
+  M5Cardputer.Display.print(ip);
   if (!g_apMode) {
-    M5Cardputer.Display.setCursor(8, 80);
-    M5Cardputer.Display.print("mDNS:   http://");
+    // hostname 太长（17 字符 size=2 已经塞满），.local 后缀单独一行同样大字，确保用户能看清完整 mDNS
+    M5Cardputer.Display.setCursor(6, 46);
     M5Cardputer.Display.print(MDNS_NAME);
-    M5Cardputer.Display.println(".local");
-  } else {
-    M5Cardputer.Display.setCursor(8, 80);
-    M5Cardputer.Display.setTextColor(0xC618, BLACK);
-    M5Cardputer.Display.println("Connect to AP, then");
-    M5Cardputer.Display.setCursor(8, 92);
-    M5Cardputer.Display.print("open http://");
-    M5Cardputer.Display.println(ip);
+    M5Cardputer.Display.setCursor(6, 68);
+    M5Cardputer.Display.print(".local");
   }
 
-  M5Cardputer.Display.setCursor(8, 115);
-  M5Cardputer.Display.setTextColor(0xFD20, BLACK);
-  M5Cardputer.Display.println("Reboot to exit");
+  // 底部：键盘提示
+  M5Cardputer.Display.setTextSize(1);
+  M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
+  M5Cardputer.Display.setCursor(6, 95);
+  if (g_apMode) {
+    M5Cardputer.Display.print("[q] Exit BLE");
+  } else {
+    M5Cardputer.Display.print("[a] Switch AP   [q] Exit BLE");
+  }
+
+  // 状态行（最底部，灰色）
+  M5Cardputer.Display.setTextColor(0x8410, BLACK);
+  M5Cardputer.Display.setCursor(6, 113);
+  M5Cardputer.Display.print(status);
 }
 
 // /api/status — JSON 健康状态
@@ -2074,6 +2106,7 @@ static void registerWebRoutes() {
   g_web->on("/api/screenshot",  HTTP_GET,  handleScreenshot);
   g_web->on("/api/wifi/scan",   HTTP_GET,  handleWifiScan);
   g_web->on("/api/reboot",      HTTP_POST, handleCancel);
+  g_web->on("/api/switch-to-ap",HTTP_POST, handleSwitchAp);
 }
 
 static void startApMode() {
@@ -2131,11 +2164,36 @@ void setupConfigMode() {
   delay(100);
   Serial.printf("[config] enter, stored ssid='%s'\n", g_wifiSsid.c_str());
 
-  // 有 stored creds → 试 STA；空或失败 → AP fallback
-  if (!tryStaConnect()) {
+  // 检查 force_ap flag（用户在 STA 模式下点了"切到 AP"）
+  bool forceAp = false;
+  {
+    Preferences prefs;
+    prefs.begin("kb", false);
+    forceAp = prefs.getBool("force_ap", false);
+    if (forceAp) prefs.remove("force_ap");
+    prefs.end();
+  }
+
+  // 强制 AP / 没有 stored creds / STA 失败 → AP；否则 STA
+  if (forceAp) {
+    Serial.println("[config] force_ap flag set, going AP");
+    startApMode();
+  } else if (!tryStaConnect()) {
     startApMode();
   }
   g_configEnterTime = millis();
+}
+
+// /api/switch-to-ap — 用户在 STA 模式想切到 AP
+void handleSwitchAp() {
+  Preferences prefs;
+  prefs.begin("kb", false);
+  prefs.putBool("force_ap", true);
+  prefs.end();
+  requestConfigBoot();
+  g_web->send(200, "text/plain", "switching to AP, rebooting");
+  delay(200);
+  esp_restart();
 }
 
 void configModeLoop() {
@@ -2144,6 +2202,27 @@ void configModeLoop() {
   if (g_staConnected && WiFi.status() != WL_CONNECTED) {
     delay(3000);
     if (WiFi.status() != WL_CONNECTED) esp_restart();
+  }
+
+  // 配置模式下读物理键盘：'a' 切 AP，'q' 退出回 BLE
+  M5Cardputer.update();
+  if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+    auto& keys = M5Cardputer.Keyboard.keysState();
+    for (auto c : keys.word) {
+      if ((c == 'a' || c == 'A') && !g_apMode) {
+        Preferences prefs;
+        prefs.begin("kb", false);
+        prefs.putBool("force_ap", true);
+        prefs.end();
+        requestConfigBoot();
+        delay(100);
+        esp_restart();
+      } else if (c == 'q' || c == 'Q') {
+        // 退出回 BLE 正常模式（不设 cfg_boot）
+        delay(100);
+        esp_restart();
+      }
+    }
   }
   delay(2);
 }
