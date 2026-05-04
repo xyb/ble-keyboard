@@ -2414,6 +2414,7 @@ void loop() {
     // --- Modifier 释放边沿：调 onModRelease ---
     if (!fnNow && fnPrevHeld) {
       onModRelease(&fnState, _now, fnUsedAsModifier, TK_FN, COL_KEY_ENT);
+      fnPressStart = 0;  // 清零，避免下次按 Fn 时外层每帧检测拿到旧 fnPressStart 立刻触发
       screenWake();
     }
     if (!ctrlNow && ctrlPrevHeld) {
