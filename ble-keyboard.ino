@@ -1979,40 +1979,43 @@ void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.setCursor(6, 4);
   M5Cardputer.Display.print(g_apMode ? "AP MODE" : "STA MODE");
 
-  // 右上角：SSID（小字，灰）
+  // 右上角：SSID + 状态合并两行（省底部一行空间）
   M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setTextColor(0xC618, BLACK);
-  M5Cardputer.Display.setCursor(124, 8);
   const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
+  M5Cardputer.Display.setTextColor(0xC618, BLACK);
+  M5Cardputer.Display.setCursor(124, 4);
   M5Cardputer.Display.printf("SSID: %.14s", ssid);
+  M5Cardputer.Display.setTextColor(0x8410, BLACK);
+  M5Cardputer.Display.setCursor(124, 14);
+  M5Cardputer.Display.print(status);
 
-  // 主体：访问入口（最大字体，醒目）
+  // 主体：访问入口（最大字体，醒目）。IP 和 mDNS 用不同颜色区分，但同等大小。
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
   M5Cardputer.Display.setCursor(6, 24);
   M5Cardputer.Display.print(ip);
   if (!g_apMode) {
-    // hostname 太长（17 字符 size=2 已经塞满），.local 后缀单独一行同样大字，确保用户能看清完整 mDNS
+    // hostname 太长（17 字符 size=2 已经塞满），.local 后缀单独一行同样大字
+    // 黄色让两行视觉上是"一组 mDNS 名"，跟上面 cyan 的 IP 区分开
+    M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
     M5Cardputer.Display.setCursor(6, 46);
     M5Cardputer.Display.print(MDNS_NAME);
     M5Cardputer.Display.setCursor(6, 68);
     M5Cardputer.Display.print(".local");
   }
 
-  // 底部：键盘提示
-  M5Cardputer.Display.setTextSize(1);
+  // 底部：键盘提示（size=2，跟主体齐平大小）
+  M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
-  M5Cardputer.Display.setCursor(6, 95);
   if (g_apMode) {
+    M5Cardputer.Display.setCursor(6, 100);
     M5Cardputer.Display.print("[q] Exit BLE");
   } else {
-    M5Cardputer.Display.print("[a] Switch AP   [q] Exit BLE");
+    M5Cardputer.Display.setCursor(6, 95);
+    M5Cardputer.Display.print("[a] Swap AP");
+    M5Cardputer.Display.setCursor(6, 115);
+    M5Cardputer.Display.print("[q] Exit BLE");
   }
-
-  // 状态行（最底部，灰色）
-  M5Cardputer.Display.setTextColor(0x8410, BLACK);
-  M5Cardputer.Display.setCursor(6, 113);
-  M5Cardputer.Display.print(status);
 }
 
 // /api/status — JSON 健康状态
