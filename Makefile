@@ -9,7 +9,7 @@ BUILD_DIR_CARD := build/cardputer
 
 FQBN_C      := m5stack:esp32:m5stack_stickc
 FQBN_CP     := m5stack:esp32:m5stack_stickc_plus
-FQBN_CARD   := m5stack:esp32:m5stack_cardputer:PartitionScheme=huge_app
+FQBN_CARD   := m5stack:esp32:m5stack_cardputer:PartitionScheme=huge_app,PSRAM=opi
 
 PORT_C      ?= /dev/cu.usbserial-XXXXXXXX
 PORT_CP     ?= /dev/cu.usbserial-XXXXXXXX
@@ -17,6 +17,12 @@ PORT_CARD   ?= /dev/cu.usbmodem1101
 
 BAUD        ?= 115200
 UPLOAD_BAUD ?= 1500000
+
+# 版本信息：参考 ESP-IDF 规范，git describe --long --tags --dirty 输出格式
+# 例 v0.1.0-3-g034d67f-dirty  (tag-commits-since-tag-shorthash[-dirty])
+FW_VERSION  := $(shell git -C $(CURDIR) describe --tags --dirty --always --long 2>/dev/null || echo dev)
+BUILD_DATE  := $(shell date -u '+%Y-%m-%dT%H:%MZ')
+VERSION_FLAGS := "-DFW_VERSION=\"$(FW_VERSION)\"" "-DFW_BUILD_DATE=\"$(BUILD_DATE)\""
 
 # esptool's bundled pyserial crashes on macOS when a USB device has
 # non-UTF8 characters in its IOKit name.  This wrapper monkey-patches
@@ -70,7 +76,8 @@ build-cp:
 	$(ARDUINO_CLI) compile --fqbn $(FQBN_CP) --build-path $(BUILD_DIR_CP) $(SKETCH)
 
 build-card:
-	$(ARDUINO_CLI) compile --fqbn $(FQBN_CARD) --build-path $(BUILD_DIR_CARD) $(SKETCH)
+	$(ARDUINO_CLI) compile --fqbn $(FQBN_CARD) --build-path $(BUILD_DIR_CARD) \
+	  --build-property "compiler.cpp.extra_flags=$(VERSION_FLAGS)" $(SKETCH)
 
 # Upload using arduino-cli first; if it hits the pyserial UTF-8 bug,
 # fall back to esptool with monkey-patched pyserial.

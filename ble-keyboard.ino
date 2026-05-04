@@ -401,29 +401,54 @@ const int WAIT_Y4         = WAIT_Y3 + WAIT_LINE_H + WAIT_LINE_GAP;
 // Flash overlay
 const int FLASH_DELAY      = 200;
 
+// 固件版本：参照 ESP-IDF 规范，Makefile 通过 -DFW_VERSION / -DFW_BUILD_DATE 注入
+// FW_VERSION 由 `git describe --tags --dirty --always --long` 生成，例 "v0.1.0-3-g034d67f-dirty"
+#ifndef FW_VERSION
+#define FW_VERSION "dev"
+#endif
+#ifndef FW_BUILD_DATE
+#define FW_BUILD_DATE __DATE__
+#endif
+const char* FIRMWARE_VERSION = FW_VERSION " (" FW_BUILD_DATE ")";
+
+// 双缓冲 sprite：所有 BLE 主屏 + flash 都画到这里，画完 pushSprite(0,0) 一次同步整屏。
+LGFX_Sprite g_canvas(&M5Cardputer.Display);
+// flash overlay 用的 banner sprite，partial push 200×60
+LGFX_Sprite g_banner(&M5Cardputer.Display);
+// banner 区域备份：showFlash 出现前先把 g_canvas 该区域拷过来，结束时直接 partial push 这个还原，
+// 避免调 drawStatus 整屏 push 引起的扫描闪烁
+LGFX_Sprite g_restore(&M5Cardputer.Display);
+const int FLASH_BANNER_W = 200;
+const int FLASH_BANNER_H = 60;
+const int FLASH_BANNER_X = (SCREEN_W - FLASH_BANNER_W) / 2;
+const int FLASH_BANNER_Y = (SCREEN_H - FLASH_BANNER_H) / 2;
+
+// 用 g_canvas 替代直接画 Display；保持函数签名不变
+#define D g_canvas
+
 void drawKeyBlock(int x, int y, int w, int h, uint16_t bg, const char* label, const char* action) {
-  M5Cardputer.Display.fillRoundRect(x, y, w, h, KEY_CORNER_R, bg);
-  M5Cardputer.Display.setTextColor(BLACK);
+  D.fillRoundRect(x, y, w, h, KEY_CORNER_R, bg);
+  D.setTextColor(BLACK);
   // Label: size 2, auto-shrink if too wide
   int labelLen = strlen(label);
   if (labelLen * FONT2_W <= w - KEY_LABEL_PAD) {
-    M5Cardputer.Display.setTextSize(2);
-    M5Cardputer.Display.setCursor(x + (w - labelLen * FONT2_W) / 2, y + KEY_LABEL_Y1);
+    D.setTextSize(2);
+    D.setCursor(x + (w - labelLen * FONT2_W) / 2, y + KEY_LABEL_Y1);
   } else {
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setCursor(x + (w - labelLen * FONT1_W) / 2, y + KEY_LABEL_Y1_SM);
+    D.setTextSize(1);
+    D.setCursor(x + (w - labelLen * FONT1_W) / 2, y + KEY_LABEL_Y1_SM);
   }
-  M5Cardputer.Display.print(label);
+  D.print(label);
   // Action: size 1.5 if fits, else size 1
   int actionLen = strlen(action);
   if (actionLen * FONT15_W <= w - KEY_ACTION_PAD) {
-    M5Cardputer.Display.setTextSize(1.5);
-    M5Cardputer.Display.setCursor(x + (w - actionLen * FONT15_W) / 2, y + h - KEY_ACTION_BOT1);
+    D.setTextSize(1.5);
+    D.setCursor(x + (w - actionLen * FONT15_W) / 2, y + h - KEY_ACTION_BOT1);
   } else {
-    M5Cardputer.Display.setTextSize(1);
-    M5Cardputer.Display.setCursor(x + (w - actionLen * FONT1_W) / 2, y + h - KEY_ACTION_BOT2);
+    D.setTextSize(1);
+    D.setCursor(x + (w - actionLen * FONT1_W) / 2, y + h - KEY_ACTION_BOT2);
   }
-  M5Cardputer.Display.print(action);
+  D.print(action);
 }
 
 void updateBattery() {
@@ -459,41 +484,42 @@ void updateBattery() {
   int totalW = BLE_DOT_R + BLE_LABEL_GAP + BLE_TEXT_W + BLE_PCT_GAP + tw;
   int dotX = SCREEN_W - totalW - BLE_DOT_R - BLE_DOT_CLEAR_PAD * 2;
   // Clear area for dot + BLE + battery text
-  M5Cardputer.Display.fillRect(dotX - BLE_DOT_R - BLE_DOT_CLEAR_PAD, BLE_DOT_CLEAR_PAD,
+  D.fillRect(dotX - BLE_DOT_R - BLE_DOT_CLEAR_PAD, BLE_DOT_CLEAR_PAD,
     SCREEN_W - dotX + BLE_DOT_R + BLE_DOT_CLEAR_PAD * 2, BLE_BAR_H, BLACK);
   // BLE status dot + label
   uint16_t bleCol = connected ? BLUE : RED;
-  M5Cardputer.Display.fillCircle(dotX, BLE_DOT_Y, BLE_DOT_R, bleCol);
-  M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setTextColor(DARKGREY);
-  M5Cardputer.Display.setCursor(dotX + BLE_DOT_R + BLE_LABEL_GAP, STATUS_TEXT_Y);
-  M5Cardputer.Display.print("BLE");
+  D.fillCircle(dotX, BLE_DOT_Y, BLE_DOT_R, bleCol);
+  D.setTextSize(1);
+  D.setTextColor(DARKGREY);
+  D.setCursor(dotX + BLE_DOT_R + BLE_LABEL_GAP, STATUS_TEXT_Y);
+  D.print("BLE");
   // Battery / power status
-  M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setTextColor(batCol);
-  M5Cardputer.Display.setCursor(dotX + BLE_DOT_R + BLE_TEXT_W + BLE_PCT_GAP, STATUS_TEXT_Y);
-  M5Cardputer.Display.print(buf);
+  D.setTextSize(1);
+  D.setTextColor(batCol);
+  D.setCursor(dotX + BLE_DOT_R + BLE_TEXT_W + BLE_PCT_GAP, STATUS_TEXT_Y);
+  D.print(buf);
+  D.pushSprite(0, 0);
 }
 
 void drawStatus() {
   if (!screenOn) return;
-  M5Cardputer.Display.fillScreen(BLACK);
+  D.fillScreen(BLACK);
 
   // Top bar: device name (left) + BLE dot + battery (right via updateBattery)
-  M5Cardputer.Display.setTextSize(1);
-  M5Cardputer.Display.setTextColor(DARKGREY);
-  M5Cardputer.Display.setCursor(STATUS_MARGIN, STATUS_TEXT_Y);
-  M5Cardputer.Display.print(fullDeviceName);
+  D.setTextSize(1);
+  D.setTextColor(DARKGREY);
+  D.setCursor(STATUS_MARGIN, STATUS_TEXT_Y);
+  D.print(fullDeviceName);
   updateBattery();
 
   if (!connected) {
     // 4-line waiting screen, all size 2, vertically centered
     auto centerPrint = [](const char* msg, int y, uint16_t color) {
-      M5Cardputer.Display.setTextSize(2);
-      M5Cardputer.Display.setTextColor(color);
+      D.setTextSize(2);
+      D.setTextColor(color);
       int x = (SCREEN_W - strlen(msg) * FONT2_W) / 2;
-      M5Cardputer.Display.setCursor(x > 0 ? x : 0, y);
-      M5Cardputer.Display.print(msg);
+      D.setCursor(x > 0 ? x : 0, y);
+      D.print(msg);
     };
     centerPrint("BLE Keyboard",  WAIT_Y1, CYAN);      // type first
     centerPrint(fullDeviceName,  WAIT_Y2, WHITE);    // then device name
@@ -532,14 +558,21 @@ void showFlash(const char* text, uint16_t color) {
     M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
-  M5Cardputer.Display.fillScreen(color);
-  M5Cardputer.Display.setTextSize(3);
-  M5Cardputer.Display.setTextColor(BLACK);
+  // 1. 备份 banner 区域：把 g_canvas 上对应 200×60 矩形拷到 g_restore
+  //    （g_canvas 持有 BLE 主屏 framebuffer 副本，drawStatus 末尾已 push 同步过 LCD）
+  g_canvas.pushSprite(&g_restore, -FLASH_BANNER_X, -FLASH_BANNER_Y);
+  // 2. 画 flash overlay 到 banner sprite，partial push 到 LCD
+  g_banner.fillSprite(color);
+  g_banner.setTextSize(3);
+  g_banner.setTextColor(BLACK, color);
   int tw = strlen(text) * FONT3_W;
-  M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - FONT3_H) / 2);
-  M5Cardputer.Display.print(text);
+  g_banner.setCursor((FLASH_BANNER_W - tw) / 2, (FLASH_BANNER_H - FONT3_H) / 2);
+  g_banner.print(text);
+  g_banner.pushSprite(FLASH_BANNER_X, FLASH_BANNER_Y);
+  // 3. 等
   delay(FLASH_DELAY);
-  drawStatus();
+  // 4. 用备份的 g_restore partial push 回去，避免整屏 push 引起的扫描闪烁
+  g_restore.pushSprite(FLASH_BANNER_X, FLASH_BANNER_Y);
   lastActivity = millis();
 }
 
@@ -2059,11 +2092,13 @@ void handleStatus() {
   const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
   const char* ip   = g_apMode ? g_apIp.c_str() : g_staIp.c_str();
 
-  static char buf[256];
+  static char buf[320];
   snprintf(buf, sizeof(buf),
-    "{\"mode\":\"%s\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
+    "{\"firmware\":\"%s\","
+    "\"mode\":\"%s\",\"wifi_ssid\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,"
     "\"mdns\":\"%s.local\",\"uptime_s\":%lu,\"battery\":%d,"
     "\"binding_count\":%u,\"stored_ssid\":\"%s\",\"heap_free\":%u}",
+    FIRMWARE_VERSION,
     mode, ssid, ip, rssi, MDNS_NAME, uptime, bat,
     g_config.count, g_wifiSsid.c_str(), (unsigned)ESP.getFreeHeap());
   g_web->send(200, "application/json", String(buf));
@@ -2306,6 +2341,23 @@ void setup() {
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
   M5Cardputer.Display.fillScreen(BLACK);
+  // 立即画 boot splash，避免 loadConfig + setupConfigMode 期间用户看到 1-2 秒黑屏
+  {
+    M5Cardputer.Display.setTextSize(3);
+    M5Cardputer.Display.setTextColor(0xFFE0, BLACK);
+    const char* msg = "Booting...";
+    int tw = strlen(msg) * FONT3_W;
+    M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - FONT3_H) / 2);
+    M5Cardputer.Display.print(msg);
+  }
+  // BLE 主屏 + flash overlay 用 sprite 双缓冲，消除整屏重画闪烁
+  g_canvas.setPsram(true);
+  g_banner.setPsram(true);
+  g_restore.setPsram(true);
+  g_canvas.createSprite(SCREEN_W, SCREEN_H);
+  g_banner.createSprite(FLASH_BANNER_W, FLASH_BANNER_H);
+  g_restore.createSprite(FLASH_BANNER_W, FLASH_BANNER_H);
+  Serial.printf("[boot] firmware: %s\n", FIRMWARE_VERSION);
   Serial.println("[boot] M5Cardputer ok");
 
   // 进配置模式标志（防御：失败默认 false，把它放在 BLE 之前是为了节省 BLE 不必要的初始化）
