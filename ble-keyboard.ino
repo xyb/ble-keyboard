@@ -1005,6 +1005,7 @@ void flashBtnA() {
 // WiFi config 模式相关全局（提前到 loadConfig 之前，避免编译顺序问题）
 String g_wifiSsid = "";
 String g_wifiPass = "";
+String g_lastPreset = "";
 const char* MDNS_NAME = "cardputer-kb";  // 访问 http://cardputer-kb.local
 const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就 fallback 到 AP
 unsigned long g_configEnterTime = 0;
@@ -1054,6 +1055,7 @@ void loadConfig() {
   }
   g_wifiSsid = prefs.getString("ssid", "");
   g_wifiPass = prefs.getString("pass", "");
+  g_lastPreset = prefs.getString("preset", "");
   prefs.end();
   // ⚠️ 开发期默认值：NVS 空时 fallback 到家里的 WiFi。push 前要改成空字符串。
   if (g_wifiSsid.length() == 0) {
@@ -1098,14 +1100,17 @@ void requestConfigBoot() {
 
 // AK 枚举 → BleKeyboard library 的 HID 键值（非 char 的，return 0 = 字面字符走另外路径）
 // 返回值：高位 0x80 = 字面字符（低 7 位是 ASCII），其它 = HID 键值
-static uint16_t akToKey(uint8_t a) {
+// 返回 BleKeyboard.press() 接受的字节：ASCII 字符直接返回字面值（库内部会用 _asciimap 转 HID code），
+// special keys 返回 KEY_RETURN/KEY_TAB 等 0xB0+ 高位 keycode（库内部会减 136 转 HID）。
+// 不要再用 0x80 当"ASCII 标志位"——会跟 special key 的 bit7 冲突（KEY_RETURN=0xB0 等 bit7 都是 1）。
+static uint8_t akToKey(uint8_t a) {
   switch (a) {
     case AK_ENTER:     return KEY_RETURN;
     case AK_TAB:       return KEY_TAB;
     case AK_ESC:       return KEY_ESC;
     case AK_BACKSPACE: return KEY_BACKSPACE;
     case AK_DELETE:    return KEY_DELETE;
-    case AK_SPACE:     return 0x80 | ' ';
+    case AK_SPACE:     return ' ';
     case AK_UP:        return KEY_UP_ARROW;
     case AK_DOWN:      return KEY_DOWN_ARROW;
     case AK_LEFT:      return KEY_LEFT_ARROW;
@@ -1123,23 +1128,20 @@ static uint16_t akToKey(uint8_t a) {
     case AK_F11: return KEY_F11; case AK_F12: return KEY_F12;
     default: break;
   }
-  // 字母 a-z
-  if (a >= AK_A && a <= AK_Z) return 0x80 | ('a' + (a - AK_A));
-  // 数字 0-9
-  if (a >= AK_0 && a <= AK_9) return 0x80 | ('0' + (a - AK_0));
-  // 符号
+  if (a >= AK_A && a <= AK_Z) return 'a' + (a - AK_A);
+  if (a >= AK_0 && a <= AK_9) return '0' + (a - AK_0);
   switch (a) {
-    case AK_BACKTICK:  return 0x80 | '`';
-    case AK_MINUS:     return 0x80 | '-';
-    case AK_EQUAL:     return 0x80 | '=';
-    case AK_LBRACKET:  return 0x80 | '[';
-    case AK_RBRACKET:  return 0x80 | ']';
-    case AK_BACKSLASH: return 0x80 | '\\';
-    case AK_SEMICOLON: return 0x80 | ';';
-    case AK_QUOTE:     return 0x80 | '\'';
-    case AK_COMMA:     return 0x80 | ',';
-    case AK_PERIOD:    return 0x80 | '.';
-    case AK_SLASH:     return 0x80 | '/';
+    case AK_BACKTICK:  return '`';
+    case AK_MINUS:     return '-';
+    case AK_EQUAL:     return '=';
+    case AK_LBRACKET:  return '[';
+    case AK_RBRACKET:  return ']';
+    case AK_BACKSLASH: return '\\';
+    case AK_SEMICOLON: return ';';
+    case AK_QUOTE:     return '\'';
+    case AK_COMMA:     return ',';
+    case AK_PERIOD:    return '.';
+    case AK_SLASH:     return '/';
   }
   return 0;
 }
@@ -1218,11 +1220,8 @@ static void executeBinding(const Binding& b, uint16_t flashColor) {
   if (b.ctrl)  bleKeyboard.press(KEY_LEFT_CTRL);
   if (b.shift) bleKeyboard.press(KEY_LEFT_SHIFT);
 
-  uint16_t k = akToKey(b.action);
-  if (k != 0) {
-    uint8_t kk = (k & 0x80) ? (k & 0x7F) : (uint8_t)k;
-    bleKeyboard.press(kk);
-  }
+  uint8_t k = akToKey(b.action);
+  if (k != 0) bleKeyboard.press(k);
   bleKeyboard.releaseAll();
 
   char label[32];
@@ -1341,7 +1340,7 @@ static void pollMod(ModTapState* sp, uint8_t trigger, uint16_t color, bool held)
 // 任意字符键的处理（normal mode 没有别的 layer 干预时）
 // 返回 true = 已被某 binding 消费；false = 走默认字面透传
 bool dispatchKeyTap(char c) {
-  const Binding* b = findBinding(TK_KEY, (uint8_t)c);
+  const Binding* b = findBinding(TK_KEY, TEV_SINGLE, (uint8_t)c);
   if (b) {
     uint16_t color = (c == '`') ? COL_KEY_ESC :
                      (c >= '0' && c <= '9') ? COL_KEY_NUM : COL_KEY_NUM;
@@ -1444,6 +1443,8 @@ const char JS_CODE[] =
 "}"
 "return h+\"</select>\";"
 "}"
+// 字符 trigger 的友好名（用于 option title hover 提示）
+"const SYM_NAMES={32:'空格 Space',9:'Tab',10:'回车 Enter',8:'退格 Backspace',96:'反引号 backtick `',45:'减号 -',61:'等号 =',91:'左方括号 [',93:'右方括号 ]',92:'反斜杠 \\\\',59:'分号 ;',39:'单引号 \\'',44:'逗号 ,',46:'句号 .',47:'斜杠 /'};"
 "function trigSelectHtml(curr,key){"
 "let cur='';"
 "if((curr>=1&&curr<=3)||curr==5||curr==6)cur='m'+curr;"
@@ -1451,13 +1452,14 @@ const char JS_CODE[] =
 "let h=\"<select class='b-trig'>\";"
 "h+=\"<optgroup label='修饰键'>\";"
 "for(const [v,l] of [['m1','Ctrl'],['m2','Opt'],['m3','Fn'],['m5','Aa (Shift)'],['m6','Alt']])"
-"h+=`<option value='${v}' ${cur==v?'selected':''}>${l}</option>`;"
+"h+=`<option value='${v}' ${cur==v?'selected':''} title='${l}'>${l}</option>`;"
 "h+=\"</optgroup>\";"
 "for(const grp of TRIG_KEY_OPTS){"
 "h+=`<optgroup label='${grp.g}'>`;"
 "for(const [code,l] of grp.o){"
 "const v='k'+code;"
-"h+=`<option value='${v}' ${cur==v?'selected':''}>${l}</option>`;"
+"const t=SYM_NAMES[code]||l;"
+"h+=`<option value='${v}' ${cur==v?'selected':''} title='${t}'>${l}</option>`;"
 "}"
 "h+=\"</optgroup>\";"
 "}"
@@ -1543,10 +1545,11 @@ const char JS_CODE[] =
 "const r=await fetch('/api/presets');const presets=await r.json();"
 "const p=presets.find(x=>x.name===name);"
 "if(!p)return;"
-"if(p.bindings.length===0){clearRows();return;}"
+"if(p.bindings.length===0){clearRows();highlightConflicts();return;}"
 // 合并：preset 定义的 trigger 覆盖现有，未定义的保留
 "const merged=mergeBindings(collectBindings(),p.bindings);"
 "loadBindings(merged);"
+"highlightConflicts();"
 "}"
 "async function init(){"
 "const r=await fetch('/api/config');const cfg=await r.json();"
@@ -1556,15 +1559,59 @@ const char JS_CODE[] =
 "for(const p of presets){"
 "const o=document.createElement('option');o.value=p.name;o.textContent=p.name;sel.appendChild(o);"
 "}"
+"if(cfg.last_preset)sel.value=cfg.last_preset;"
+"document.getElementById('binds').addEventListener('change',highlightConflicts);"
+"highlightConflicts();"
+"}"
+// 找出冲突：trigger+event+key 完全相同的 row 标红
+"function highlightConflicts(){"
+"const rows=document.querySelectorAll('.bind-row');"
+"rows.forEach(r=>{r.classList.remove('conflict');const c=r.nextElementSibling;if(c&&c.classList.contains('bind-cmt-row'))c.classList.remove('conflict');});"
+"const seen={};const conflicts=new Set();"
+"rows.forEach((r,i)=>{"
+"const tv=r.querySelector('.b-trig').value;"
+"const ev=r.querySelector('.b-event').value;"
+"const k=tv+'|'+ev;"
+"if(seen[k]!==undefined){conflicts.add(seen[k]);conflicts.add(i);}"
+"else seen[k]=i;"
+"});"
+"conflicts.forEach(i=>{rows[i].classList.add('conflict');const c=rows[i].nextElementSibling;if(c&&c.classList.contains('bind-cmt-row'))c.classList.add('conflict');});"
+"const banner=document.getElementById('conflict-banner');"
+"if(banner)banner.style.display=conflicts.size>0?'block':'none';"
+"return conflicts.size;"
 "}"
 "async function saveAll(){"
+"if(highlightConflicts()>0){if(!confirm('存在冲突的映射（红色行），确定保存？'))return;}"
 "const data={"
 "ssid:document.getElementById('ssid').value,"
 "pass:document.getElementById('pass').value,"
+"last_preset:document.getElementById('preset').value||'',"
 "bindings:collectBindings()"
 "};"
 "const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});"
 "document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>已保存，正在重启…</h2>\";"
+"}"
+// 导出当前表单为 JSON 文件下载
+"function exportConfig(){"
+"const cfg={last_preset:document.getElementById('preset').value||'',bindings:collectBindings()};"
+"const blob=new Blob([JSON.stringify(cfg,null,2)],{type:'application/json'});"
+"const a=document.createElement('a');"
+"a.href=URL.createObjectURL(blob);"
+"a.download='cardputer-keyboard-config.json';"
+"a.click();"
+"URL.revokeObjectURL(a.href);"
+"}"
+// 导入：粘贴 JSON 文本，加载到表单（不立即保存，需用户点保存按钮）
+"function importConfig(){"
+"const txt=prompt('粘贴 JSON 配置（导出的格式）：');"
+"if(!txt)return;"
+"try{const cfg=JSON.parse(txt);"
+"if(!cfg.bindings||!Array.isArray(cfg.bindings))throw new Error('missing bindings array');"
+"loadBindings(cfg.bindings);"
+"if(cfg.last_preset)document.getElementById('preset').value=cfg.last_preset;"
+"highlightConflicts();"
+"alert('已加载，记得点保存并重启');"
+"}catch(e){alert('解析失败：'+e.message);}"
 "}"
 "async function cancelAll(){"
 "await fetch('/cancel',{method:'POST'});"
@@ -1611,7 +1658,9 @@ void handleRoot() {
   body += "table.bindings th:first-child,table.bindings td:first-child{text-align:left;font-weight:600}";
   body += "table.bindings select{width:auto;min-width:8em}";
   body += "table.bindings input[type=checkbox]{width:auto;transform:scale(1.3)}";
-  body += ".banner{padding:.7em 1em;border-radius:6px;margin-bottom:1em;font-size:.95em}";
+  body += ".banner{padding:.9em 1.2em;border-radius:6px;margin-bottom:1em;font-size:1.05em;line-height:1.6}";
+  body += ".banner b,.banner code{font-size:1.1em}";
+  body += ".banner code{font-family:ui-monospace,monospace;background:rgba(0,0,0,.05);padding:.05em .3em;border-radius:3px}";
   body += ".banner-sta{background:#dcfce7;color:#166534;border:1px solid #86efac}";
   body += ".banner-ap{background:#fef3c7;color:#854d0e;border:1px solid #fcd34d}";
   // 用 <table> 让 header 和 row 列宽自动对齐
@@ -1638,7 +1687,11 @@ void handleRoot() {
   body += "table.bind-table tr.bind-cmt-row td{padding:0 .4em .6em;border-bottom:1px solid #eee}";
   body += "table.bind-table tr.bind-cmt-row input.b-comment{width:100%;font-size:.85em;padding:.25em .5em;color:#555;border:1px dashed #ccc;border-radius:3px;background:#fafafa;box-sizing:border-box}";
   body += "table.bind-table tr.bind-cmt-row input.b-comment:focus{border-style:solid;border-color:#888;background:#fff;color:#222;outline:none}";
-  body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
+  body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;cursor:pointer;font-size:.95em;width:auto}";
+  body += ".io-btn{background:#fff;color:#374151;border:1px solid #d1d5db;border-radius:4px;padding:.5em 1em;cursor:pointer;font-size:.9em;width:auto}";
+  body += ".io-btn:hover{background:#f3f4f6}";
+  body += "table.bind-table tr.bind-row.conflict td,table.bind-table tr.bind-cmt-row.conflict td{background:#fef2f2}";
+  body += "table.bind-table tr.bind-row.conflict td:first-child{box-shadow:inset 3px 0 0 #dc2626}";
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
 
@@ -1670,7 +1723,14 @@ void handleRoot() {
   body += "<th class='col-act'>主键</th>";
   body += "<th class='col-del'></th>";
   body += "</tr></thead><tbody id='binds'></tbody></table>";
+  body += "<div id='conflict-banner' style='display:none;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;padding:.5em .8em;border-radius:4px;margin-top:.5em;font-size:.9em'>";
+  body += "⚠️ 红色行存在重复触发（同 trigger + 事件），保存前请检查";
+  body += "</div>";
+  body += "<div style='margin-top:.5em;display:flex;gap:.5em;flex-wrap:wrap;align-items:center'>";
   body += "<button type='button' class='add-btn' onclick='addRow()'>+ 增加映射</button>";
+  body += "<button type='button' class='io-btn' onclick='exportConfig()'>导出 JSON</button>";
+  body += "<button type='button' class='io-btn' onclick='importConfig()'>导入 JSON</button>";
+  body += "</div>";
   body += "</fieldset>";
 
   body += "<button class='save' type='button' onclick='saveAll()'>保存并重启</button>";
@@ -1770,7 +1830,9 @@ void handleRoot() {
 
 // /api/config — 当前配置 JSON
 void handleApiConfig() {
-  String s = "{\"bindings\":";
+  String s = "{\"last_preset\":\"";
+  s += escapeJsonString(g_lastPreset.c_str());
+  s += "\",\"bindings\":";
   s += configJson(g_config);
   s += "}";
   g_web->send(200, "application/json", s);
@@ -1845,6 +1907,16 @@ void handleSave() {
   }
   g_config.count = count;
   saveConfig();
+
+  // last preset name (purely UI memory, NVS string)
+  String lp = jsonFindStr(body, "last_preset");
+  g_lastPreset = lp;
+  {
+    Preferences prefs;
+    prefs.begin("kb", false);
+    prefs.putString("preset", lp);
+    prefs.end();
+  }
 
   // WiFi creds
   String newSsid = jsonFindStr(body, "ssid");
