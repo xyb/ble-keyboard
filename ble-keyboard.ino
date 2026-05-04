@@ -1973,30 +1973,55 @@ void handleCancel() {
 
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
-  // 顶栏：模式标志（大字，颜色区分 STA/AP）
+  // 顶栏：模式 + SSID 合并为大字一行；颜色编码连接状态
+  // STA 已连=绿；STA 连接中=黄+...；STA 失败=红；AP=橙
   M5Cardputer.Display.setTextSize(2);
-  M5Cardputer.Display.setTextColor(g_apMode ? 0xFD20 /* orange */ : 0x07E0 /* green */, BLACK);
-  M5Cardputer.Display.setCursor(6, 4);
-  M5Cardputer.Display.print(g_apMode ? "AP MODE" : "STA MODE");
+  if (g_apMode) {
+    // AP MODE 顶栏（橙色）
+    M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
+    M5Cardputer.Display.setCursor(6, 4);
+    M5Cardputer.Display.print("AP MODE");
+  } else {
+    bool connecting = (strstr(status, "Connect") != nullptr) && !g_staConnected;
+    uint16_t color = g_staConnected ? 0x07E0 /* green */
+                    : connecting   ? 0xFFE0 /* yellow */
+                                   : 0xF800 /* red */;
+    M5Cardputer.Display.setTextColor(color, BLACK);
+    M5Cardputer.Display.setCursor(6, 4);
+    char title[28];
+    snprintf(title, sizeof(title), "STA %.13s%s",
+             g_wifiSsid.c_str(),
+             g_staConnected ? "" : (connecting ? "..." : " ?"));
+    M5Cardputer.Display.print(title);
+  }
 
-  // 右上角：SSID + 状态合并两行（省底部一行空间）
-  M5Cardputer.Display.setTextSize(1);
-  const char* ssid = g_apMode ? g_apSsidStr : g_wifiSsid.c_str();
-  M5Cardputer.Display.setTextColor(0xC618, BLACK);
-  M5Cardputer.Display.setCursor(124, 4);
-  M5Cardputer.Display.printf("SSID: %.14s", ssid);
-  M5Cardputer.Display.setTextColor(0x8410, BLACK);
-  M5Cardputer.Display.setCursor(124, 14);
-  M5Cardputer.Display.print(status);
-
-  // 主体：访问入口（最大字体，醒目）。IP 和 mDNS 用不同颜色区分，但同等大小。
+  // 主体：访问入口（最大字体，醒目）。IP 和 mDNS/SSID 用不同颜色区分。
   M5Cardputer.Display.setTextSize(2);
-  M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
-  M5Cardputer.Display.setCursor(6, 24);
-  M5Cardputer.Display.print(ip);
-  if (!g_apMode) {
-    // hostname 太长（17 字符 size=2 已经塞满），.local 后缀单独一行同样大字
-    // 黄色让两行视觉上是"一组 mDNS 名"，跟上面 cyan 的 IP 区分开
+  if (g_apMode) {
+    // AP: SSID + IP + 客户端状态
+    M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
+    M5Cardputer.Display.setCursor(6, 24);
+    M5Cardputer.Display.print(g_apSsidStr);  // CardPuter-KB-XXXX
+    M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
+    M5Cardputer.Display.setCursor(6, 46);
+    M5Cardputer.Display.print(ip);            // 192.168.4.1
+    // 客户端状态（小字）
+    M5Cardputer.Display.setTextSize(1);
+    int n = WiFi.softAPgetStationNum();
+    if (n == 0) {
+      M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
+      M5Cardputer.Display.setCursor(6, 70);
+      M5Cardputer.Display.print("Waiting for client...");
+    } else {
+      M5Cardputer.Display.setTextColor(0x07E0 /* green */, BLACK);
+      M5Cardputer.Display.setCursor(6, 70);
+      M5Cardputer.Display.printf("%d client%s connected", n, n > 1 ? "s" : "");
+    }
+  } else {
+    // STA: IP + mDNS hostname + .local
+    M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
+    M5Cardputer.Display.setCursor(6, 24);
+    M5Cardputer.Display.print(ip);
     M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
     M5Cardputer.Display.setCursor(6, 46);
     M5Cardputer.Display.print(MDNS_NAME);
@@ -2004,18 +2029,13 @@ void drawConfigScreen(const char* status, const String& ip) {
     M5Cardputer.Display.print(".local");
   }
 
-  // 底部：键盘提示（size=2，跟主体齐平大小）
+  // 底部：键盘提示（size=2，跟主体齐平大小）。STA 和 AP 都给两条提示。
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
-  if (g_apMode) {
-    M5Cardputer.Display.setCursor(6, 100);
-    M5Cardputer.Display.print("[q] Exit BLE");
-  } else {
-    M5Cardputer.Display.setCursor(6, 95);
-    M5Cardputer.Display.print("[a] Swap AP");
-    M5Cardputer.Display.setCursor(6, 115);
-    M5Cardputer.Display.print("[q] Exit BLE");
-  }
+  M5Cardputer.Display.setCursor(6, 95);
+  M5Cardputer.Display.print(g_apMode ? "[A] Swap STA Mode" : "[A] Swap AP Mode");
+  M5Cardputer.Display.setCursor(6, 115);
+  M5Cardputer.Display.print("[Q] Exit to BLE");
 }
 
 // /api/status — JSON 健康状态
@@ -2115,7 +2135,8 @@ static void registerWebRoutes() {
 static void startApMode() {
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_BT);
-  snprintf(g_apSsidStr, sizeof(g_apSsidStr), "CardPuter-KB-CFG-%02X%02X", mac[4], mac[5]);
+  // AP SSID 跟 mDNS hostname 同后缀，用户看 WiFi 列表能识别是哪台设备；缩短到一行 size=2 能放下
+  snprintf(g_apSsidStr, sizeof(g_apSsidStr), "CardPuter-KB-%02x%02x", mac[4], mac[5]);
 
   WiFi.mode(WIFI_AP);
   WiFi.softAP(g_apSsidStr);
@@ -2207,25 +2228,51 @@ void configModeLoop() {
     if (WiFi.status() != WL_CONNECTED) esp_restart();
   }
 
-  // 配置模式下读物理键盘：'a' 切 AP，'q' 退出回 BLE
+  // 配置模式下读物理键盘：'a' 在两个模式下意义不同，'q' 退出回 BLE
   M5Cardputer.update();
   if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
     auto& keys = M5Cardputer.Keyboard.keysState();
     for (auto c : keys.word) {
-      if ((c == 'a' || c == 'A') && !g_apMode) {
+      if (c == 'a' || c == 'A') {
         Preferences prefs;
         prefs.begin("kb", false);
-        prefs.putBool("force_ap", true);
+        if (g_apMode) {
+          // AP→STA: 不强制 force_ap，setupConfigMode 走 STA 优先（有 stored ssid 才能成功，否则会再次 AP fallback）
+          prefs.remove("force_ap");
+        } else {
+          // STA→AP: 设 force_ap
+          prefs.putBool("force_ap", true);
+        }
         prefs.end();
         requestConfigBoot();
         delay(100);
         esp_restart();
       } else if (c == 'q' || c == 'Q') {
-        // 退出回 BLE 正常模式（不设 cfg_boot）
         delay(100);
         esp_restart();
       }
     }
+  }
+
+  // AP 模式：每秒重绘客户端状态行（显示 stationNum 变化）
+  static unsigned long lastApRefresh = 0;
+  static int lastStationNum = -1;
+  if (g_apMode && millis() - lastApRefresh > 1000) {
+    int n = WiFi.softAPgetStationNum();
+    if (n != lastStationNum) {
+      M5Cardputer.Display.fillRect(0, 70, 240, 10, BLACK);
+      M5Cardputer.Display.setTextSize(1);
+      M5Cardputer.Display.setCursor(6, 70);
+      if (n == 0) {
+        M5Cardputer.Display.setTextColor(0xFFE0, BLACK);
+        M5Cardputer.Display.print("Waiting for client...");
+      } else {
+        M5Cardputer.Display.setTextColor(0x07E0, BLACK);
+        M5Cardputer.Display.printf("%d client%s connected", n, n > 1 ? "s" : "");
+      }
+      lastStationNum = n;
+    }
+    lastApRefresh = millis();
   }
   delay(2);
 }
@@ -2467,8 +2514,18 @@ void loop() {
     unsigned long _now = millis();
     if (_ks.fn && !fnUsedAsModifier && fnPressStart > 0
         && (_now - fnPressStart >= FN_LONG_PRESS_MS)) {
-      showFlash("Config Mode", TFT_YELLOW);
-      delay(800);
+      // 不调 showFlash —— 它末尾会 drawStatus() 把 BLE 主屏画回来，
+      // 后面 delay 期间用户会看到 BLE 主屏，体感是"闪一下回 BLE 才进 config"
+      M5Cardputer.Display.fillScreen(TFT_YELLOW);
+      M5Cardputer.Display.setTextSize(3);
+      M5Cardputer.Display.setTextColor(BLACK);
+      {
+        const char* msg = "Config Mode";
+        int tw = strlen(msg) * FONT3_W;
+        M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - FONT3_H) / 2);
+        M5Cardputer.Display.print(msg);
+      }
+      delay(600);
       requestConfigBoot();
       esp_restart();
     }
