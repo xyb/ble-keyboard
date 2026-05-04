@@ -180,6 +180,7 @@ enum TriggerEvent : uint8_t {
 };
 
 // 单条 binding
+constexpr int BIND_COMMENT_LEN = 64;  // 含末尾 \0；UTF-8 下约 20 个汉字
 struct Binding {
   uint8_t trigger;       // TriggerKind
   uint8_t trigger_key;   // TK_KEY 时使用，存 ASCII 字符（如 '`' / 'j'）
@@ -190,6 +191,7 @@ struct Binding {
   uint8_t ctrl;
   uint8_t shift;
   uint8_t action;        // AK 枚举
+  char comment[BIND_COMMENT_LEN];  // 用户备注，UTF-8 安全（48 字节约 16 汉字）
 };
 
 // 多击/长按检测时间窗口
@@ -207,43 +209,30 @@ struct KbConfig {
 // 12 条 binding 全部默认单击事件。
 const KbConfig PRESET_LAZYTYPER = {
   {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 1, 0, 0, AK_TAB},        // Ctrl 单击→Opt+Tab（LazyTyper 听写）
-    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Opt 单击→CapsLock
-    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},      // Fn 单击→Enter
-    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},        // `→Esc
-    {TK_KEY,  '1', TEV_SINGLE, 0,  1, 0, 0, 0, AK_1},          // 1→Cmd+1（iTerm2 tab 1）
-    {TK_KEY,  '2', TEV_SINGLE, 0,  1, 0, 0, 0, AK_2},
-    {TK_KEY,  '3', TEV_SINGLE, 0,  1, 0, 0, 0, AK_3},
-    {TK_KEY,  '4', TEV_SINGLE, 0,  1, 0, 0, 0, AK_4},
-    {TK_KEY,  '5', TEV_SINGLE, 0,  1, 0, 0, 0, AK_5},
-    {TK_KEY,  '6', TEV_SINGLE, 0,  1, 0, 0, 0, AK_6},
-    {TK_KEY,  '7', TEV_SINGLE, 0,  1, 0, 0, 0, AK_7},
-    {TK_KEY,  '8', TEV_SINGLE, 0,  1, 0, 0, 0, AK_8},
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 1, 0, 0, AK_TAB,        "LazyTyper 听写键（Opt+Tab）"},
+    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK,  "中英文 IME 切换（macOS Caps Lock）"},
+    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER,      "回车发送"},
+    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC,        "Esc：退出/取消"},
+    {TK_KEY,  '1', TEV_SINGLE, 0,  1, 0, 0, 0, AK_1,          "iTerm2 tab 1"},
+    {TK_KEY,  '2', TEV_SINGLE, 0,  1, 0, 0, 0, AK_2,          "iTerm2 tab 2"},
+    {TK_KEY,  '3', TEV_SINGLE, 0,  1, 0, 0, 0, AK_3,          "iTerm2 tab 3"},
+    {TK_KEY,  '4', TEV_SINGLE, 0,  1, 0, 0, 0, AK_4,          "iTerm2 tab 4"},
+    {TK_KEY,  '5', TEV_SINGLE, 0,  1, 0, 0, 0, AK_5,          "iTerm2 tab 5"},
+    {TK_KEY,  '6', TEV_SINGLE, 0,  1, 0, 0, 0, AK_6,          "iTerm2 tab 6"},
+    {TK_KEY,  '7', TEV_SINGLE, 0,  1, 0, 0, 0, AK_7,          "iTerm2 tab 7"},
+    {TK_KEY,  '8', TEV_SINGLE, 0,  1, 0, 0, 0, AK_8,          "iTerm2 tab 8"},
   },
   12
 };
 
-// 预设 profile：Wispr Flow（语音输入 app）。
-// Wispr Flow 默认 hotkey 是 Fn（macOS 私有 modifier，BLE HID 发不出真 Fn）。
-// 这里 Ctrl 单击发 CapsLock；用户需在 Wispr Flow → Settings → Shortcuts
-// 把 hotkey 改成 Caps Lock toggle（press once start, press again stop）。
+// 预设 profile：Wispr Flow（macOS 语音输入 app）。
+// 默认 hotkey 是 Fn+Space toggle（BLE HID 发不出真 Fn——macOS 私有 modifier）。
+// 解决：在 Wispr Flow → Settings → Shortcuts 把 hotkey 改成 Caps Lock toggle。
 const KbConfig PRESET_WISPRFLOW = {
   {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Ctrl 单击→CapsLock（Wispr toggle）
-    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},
-    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},
-  },
-  3
-};
-
-// 预设 profile：GhostType / Ghostly（macOS 本地 Whisper 听写）。
-// Ghostly 默认 hotkey 也是 Fn（同上理由发不出）。
-// 用户需在 Ghostly 设置里把 hotkey 改成 Caps Lock。
-const KbConfig PRESET_GHOSTTYPE = {
-  {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK},  // Ctrl 单击→CapsLock（Ghostly toggle）
-    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER},
-    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC},
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK,  "默认 Fn+Space toggle；改 CapsLock 后用"},
+    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER,      "回车发送"},
+    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC,        "Esc：退出/取消"},
   },
   3
 };
@@ -260,7 +249,6 @@ struct PresetEntry { const char* name; const KbConfig* cfg; };
 const PresetEntry PRESETS[] = {
   {"LazyTyper + iTerm2",  &PRESET_LAZYTYPER},
   {"Wispr Flow",          &PRESET_WISPRFLOW},
-  {"GhostType",           &PRESET_GHOSTTYPE},
   {"纯透传（无映射）",      &PRESET_PASSTHROUGH},
 };
 constexpr int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
@@ -1027,7 +1015,7 @@ bool g_apMode = false;
 char g_apSsidStr[32] = {0};
 
 // 单条 binding 序列化为 10 字节
-#define BIND_BYTES 10
+#define BIND_BYTES (10 + BIND_COMMENT_LEN)  // 58: 10 字节 binding + 48 字节 comment
 static void bindingPack(uint8_t* out, const Binding& b) {
   out[0] = b.trigger;
   out[1] = b.trigger_key;
@@ -1036,6 +1024,8 @@ static void bindingPack(uint8_t* out, const Binding& b) {
   out[4] = (uint8_t)((b.long_ms >> 8) & 0xFF);
   out[5] = b.cmd; out[6] = b.opt; out[7] = b.ctrl; out[8] = b.shift;
   out[9] = b.action;
+  memcpy(out + 10, b.comment, BIND_COMMENT_LEN);
+  out[10 + BIND_COMMENT_LEN - 1] = 0;  // 强制 null 终止
 }
 static void bindingUnpack(const uint8_t* in, Binding& b) {
   b.trigger     = in[0];
@@ -1044,6 +1034,8 @@ static void bindingUnpack(const uint8_t* in, Binding& b) {
   b.long_ms     = (uint16_t)in[3] | ((uint16_t)in[4] << 8);
   b.cmd = in[5] ? 1 : 0; b.opt = in[6] ? 1 : 0; b.ctrl = in[7] ? 1 : 0; b.shift = in[8] ? 1 : 0;
   b.action = in[9];
+  memcpy(b.comment, in + 10, BIND_COMMENT_LEN);
+  b.comment[BIND_COMMENT_LEN - 1] = 0;
 }
 
 void loadConfig() {
@@ -1412,16 +1404,27 @@ static String htmlAkSelect(const char* name, uint8_t curr) {
 }
 
 // 把 binding 序列化成 JSON 对象（用于 GET /api/config 和 GET /api/presets）
+// comment 里的 " 和 \ 转义后再嵌入
+static String escapeJsonString(const char* s) {
+  String out;
+  for (const char* p = s; *p; p++) {
+    if (*p == '"' || *p == '\\') { out += '\\'; out += *p; }
+    else if ((uint8_t)*p < 0x20) continue;  // 忽略控制字符
+    else out += *p;
+  }
+  return out;
+}
 static int bindingJsonInto(char* buf, int n, const Binding& b) {
+  String esc = escapeJsonString(b.comment);
   return snprintf(buf, n,
     "{\"trigger\":%u,\"key\":%u,\"event\":%u,\"long_ms\":%u,"
-    "\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u}",
+    "\"cmd\":%u,\"opt\":%u,\"ctrl\":%u,\"shift\":%u,\"action\":%u,\"comment\":\"%s\"}",
     b.trigger, b.trigger_key, b.event, b.long_ms,
-    b.cmd, b.opt, b.ctrl, b.shift, b.action);
+    b.cmd, b.opt, b.ctrl, b.shift, b.action, esc.c_str());
 }
 static String configJson(const KbConfig& c) {
   String s = "[";
-  char buf[256];
+  char buf[320];
   for (int i = 0; i < c.count; i++) {
     if (i > 0) s += ",";
     bindingJsonInto(buf, sizeof(buf), c.bindings[i]);
@@ -1475,8 +1478,10 @@ const char JS_CODE[] =
 "const row=sel.parentElement.querySelector('.long-row');"
 "row.style.display=sel.value=='3'?'flex':'none';"
 "}"
+"function escAttr(s){return (s||'').replace(/&/g,'&amp;').replace(/\"/g,'&quot;').replace(/</g,'&lt;')}"
+"function delRowFn(t){const r=t.closest('tr'),n=r.nextElementSibling;r.remove();if(n&&n.classList.contains('bind-cmt-row'))n.remove()}"
 "function rowHtml(b){"
-"b=b||{trigger:1,key:0,event:0,long_ms:500,cmd:0,opt:0,ctrl:0,shift:0,action:0};"
+"b=b||{trigger:1,key:0,event:0,long_ms:500,cmd:0,opt:0,ctrl:0,shift:0,action:0,comment:''};"
 "return `<tr class='bind-row'>"
 "<td class='col-trig'>${trigSelectHtml(b.trigger,b.key)}</td>"
 "<td class='col-event'><div class='event-cell'>${eventSelectHtml(b.event,b.long_ms)}</div></td>"
@@ -1485,14 +1490,17 @@ const char JS_CODE[] =
 "<td class='col-mod'><input type='checkbox' class='b-ctrl' ${b.ctrl?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-shift' ${b.shift?'checked':''}></td>"
 "<td class='col-act'>${akSelectHtml(b.action)}</td>"
-"<td class='col-del'><button type='button' class='del' title='删除这条映射' onclick='this.closest(\"tr\").remove()'>×</button></td>"
-"</tr>`;"
+"<td class='col-del'><button type='button' class='del' title='删除这条映射' onclick='delRowFn(this)'>×</button></td>"
+"</tr>"
+"<tr class='bind-cmt-row'><td colspan='8'>"
+"<input type='text' class='b-comment' maxlength='63' placeholder='说明（可选，便于自己理解，最多约 20 个汉字）' value='${escAttr(b.comment)}'>"
+"</td></tr>`;"
 "}"
 "function addRow(b){"
 "const tbody=document.getElementById('binds');"
 "const tmp=document.createElement('tbody');"
 "tmp.innerHTML=rowHtml(b);"
-"tbody.appendChild(tmp.firstElementChild);"
+"while(tmp.firstElementChild) tbody.appendChild(tmp.firstElementChild);"
 "}"
 "function clearRows(){document.getElementById('binds').innerHTML=\"\"}"
 "function loadBindings(arr){clearRows();arr.forEach(addRow)}"
@@ -1507,6 +1515,8 @@ const char JS_CODE[] =
 "const ev=parseInt(r.querySelector('.b-event').value);"
 "const longInp=r.querySelector('.b-longms');"
 "const ka=r.querySelector('.b-act');"
+"const cmtRow=r.nextElementSibling;"
+"const cmtInp=cmtRow&&cmtRow.classList.contains('bind-cmt-row')?cmtRow.querySelector('.b-comment'):null;"
 "out.push({"
 "trigger:trig,"
 "key:key,"
@@ -1516,7 +1526,8 @@ const char JS_CODE[] =
 "opt:r.querySelector('.b-opt').checked?1:0,"
 "ctrl:r.querySelector('.b-ctrl').checked?1:0,"
 "shift:r.querySelector('.b-shift').checked?1:0,"
-"action:ka?parseInt(ka.value):0"
+"action:ka?parseInt(ka.value):0,"
+"comment:cmtInp?cmtInp.value:''"
 "});"
 "}"
 "return out;"
@@ -1623,6 +1634,10 @@ void handleRoot() {
   body += "table.bind-table td.col-del{line-height:0}";
   body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:0;margin:0;font-size:1.1em;color:#999;width:1.8em;height:1.8em;text-align:center;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}";
   body += "table.bind-table .del:hover{background:#fee;color:#c00}";
+  body += "table.bind-table tr.bind-row td{border-bottom:0}";
+  body += "table.bind-table tr.bind-cmt-row td{padding:0 .4em .6em;border-bottom:1px solid #eee}";
+  body += "table.bind-table tr.bind-cmt-row input.b-comment{width:100%;font-size:.85em;padding:.25em .5em;color:#555;border:1px dashed #ccc;border-radius:3px;background:#fafafa;box-sizing:border-box}";
+  body += "table.bind-table tr.bind-cmt-row input.b-comment:focus{border-style:solid;border-color:#888;background:#fff;color:#222;outline:none}";
   body += ".add-btn{background:#10b981;color:#fff;border:0;border-radius:4px;padding:.5em 1em;margin-top:.5em;cursor:pointer;font-size:.95em;width:auto}";
   body += "</style></head><body>";
   body += "<h2>CardPuter Keyboard 配置</h2>";
@@ -1821,6 +1836,9 @@ void handleSave() {
     b.ctrl        = jsonFindInt(obj, "ctrl", 0)  ? 1 : 0;
     b.shift       = jsonFindInt(obj, "shift", 0) ? 1 : 0;
     b.action      = jsonFindInt(obj, "action", 0);
+    String cmt    = jsonFindStr(obj, "comment");
+    strncpy(b.comment, cmt.c_str(), BIND_COMMENT_LEN - 1);
+    b.comment[BIND_COMMENT_LEN - 1] = 0;
     if (b.trigger != TK_NONE) count++;
     p = objEnd + 1;
     if (body[p] == ']') break;
