@@ -61,13 +61,8 @@
 #include <esp_mac.h>
 #include <esp_sleep.h>
 
-// 全局前置声明：让 Arduino 自动生成的函数原型能看到这些类型
-// （ModTapState 实际定义在 #if IS_CARDPUTER 块里，但 auto-decl 在文件顶部）
 struct ModTapState;
 
-// 子类化 BleKeyboard 以监听 host 推送的 LED output report（Caps Lock / NumLock）。
-// 用作"远程进配置模式"触发：短时间内 Caps Lock LED 切换 ≥6 次 → 进配置模式。
-// 6 次对手动操作来说几乎不可能，但 AppleScript 模拟 3 次连按（共 6 次 LED 变化）可触发。
 volatile uint8_t  g_caps_state = 0;
 volatile uint8_t  g_caps_toggle_count = 0;
 volatile unsigned long g_caps_window_start = 0;
@@ -94,7 +89,6 @@ public:
       g_caps_toggle_count++;
       if (g_caps_toggle_count >= CAPS_TRIGGER_COUNT && !g_remote_trigger_fired) {
         g_remote_trigger_fired = true;
-        // 不能在 BLE 回调里直接 esp_restart，标志位让 loop() 处理
       }
     }
   }
@@ -133,45 +127,36 @@ const int LED_PIN = 10;
 const int SCREEN_BRIGHTNESS = 80;
 
 #if IS_CARDPUTER
-// ===== WiFi 配置模式 =====
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Preferences.h>
 
-// AK = ActionKey 枚举：一个 binding 的"主键"。0 = 不发任何键
 enum AK : uint8_t {
   AK_NONE = 0,
-  // 特殊键
   AK_ENTER, AK_TAB, AK_ESC, AK_BACKSPACE, AK_DELETE, AK_SPACE,
   AK_UP, AK_DOWN, AK_LEFT, AK_RIGHT,
   AK_PAGE_UP, AK_PAGE_DOWN, AK_HOME, AK_END,
   AK_CAPS_LOCK,
-  // 功能键
   AK_F1, AK_F2, AK_F3, AK_F4, AK_F5, AK_F6,
   AK_F7, AK_F8, AK_F9, AK_F10, AK_F11, AK_F12,
-  // 字母 a-z
   AK_A, AK_B, AK_C, AK_D, AK_E, AK_F, AK_G, AK_H, AK_I, AK_J,
   AK_K, AK_L, AK_M, AK_N, AK_O, AK_P, AK_Q, AK_R, AK_S, AK_T,
   AK_U, AK_V, AK_W, AK_X, AK_Y, AK_Z,
-  // 数字 0-9
   AK_0, AK_1, AK_2, AK_3, AK_4, AK_5, AK_6, AK_7, AK_8, AK_9,
-  // 常见符号
   AK_BACKTICK, AK_MINUS, AK_EQUAL, AK_LBRACKET, AK_RBRACKET, AK_BACKSLASH,
   AK_SEMICOLON, AK_QUOTE, AK_COMMA, AK_PERIOD, AK_SLASH,
 };
 
-// 触发类型（之前 TK_*_TAP 现在统一改成 TK_CTRL/OPT/FN，事件类型走 event 字段）
 enum TriggerKind : uint8_t {
   TK_NONE = 0,
   TK_CTRL,
   TK_OPT,
   TK_FN,
-  TK_KEY,         // 一个具体字符键（trigger_key 字段记录字符）
-  TK_SHIFT,       // cardputer 上印的 "Aa" 键（M5Cardputer lib 上是 LEFT_SHIFT）
-  TK_ALT,         // cardputer 上印的 "Alt" 键
+  TK_KEY,
+  TK_SHIFT,
+  TK_ALT,
 };
 
-// 触发事件：单击 / 双击 / 三击 / 长按
 enum TriggerEvent : uint8_t {
   TEV_SINGLE = 0,
   TEV_DOUBLE,
@@ -179,22 +164,20 @@ enum TriggerEvent : uint8_t {
   TEV_LONG,
 };
 
-// 单条 binding
-constexpr int BIND_COMMENT_LEN = 64;  // 含末尾 \0；UTF-8 下约 20 个汉字
+constexpr int BIND_COMMENT_LEN = 64;
 struct Binding {
   uint8_t trigger;       // TriggerKind
-  uint8_t trigger_key;   // TK_KEY 时使用，存 ASCII 字符（如 '`' / 'j'）
+  uint8_t trigger_key;
   uint8_t event;         // TriggerEvent
-  uint16_t long_ms;      // TEV_LONG 时长按门槛，默认 500
+  uint16_t long_ms;
   uint8_t cmd;
   uint8_t opt;
   uint8_t ctrl;
   uint8_t shift;
-  uint8_t action;        // AK 枚举
-  char comment[BIND_COMMENT_LEN];  // 用户备注，UTF-8 安全（48 字节约 16 汉字）
+  uint8_t action;
+  char comment[BIND_COMMENT_LEN];
 };
 
-// 多击/长按检测时间窗口
 constexpr unsigned long TAP_WINDOW_MS = 280;
 constexpr unsigned long LONG_PRESS_DEFAULT_MS = 500;
 
@@ -205,14 +188,12 @@ struct KbConfig {
   uint8_t  count;
 };
 
-// 预设 profile：LazyTyper + iTerm2（xyb 主力——语音输入 + iTerm2 tab 切换）
-// 12 条 binding 全部默认单击事件。
 const KbConfig PRESET_LAZYTYPER = {
   {
-    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 1, 0, 0, AK_TAB,        "LazyTyper 听写键（Opt+Tab）"},
-    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK,  "中英文 IME 切换（macOS Caps Lock）"},
-    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER,      "回车发送"},
-    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC,        "Esc：退出/取消"},
+    {TK_CTRL,  0,  TEV_SINGLE, 0,  0, 1, 0, 0, AK_TAB,        "LazyTyper voice (Opt+Tab)"},
+    {TK_OPT,   0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_CAPS_LOCK,  "IME switch (EN/CN, macOS Caps Lock)"},
+    {TK_FN,    0,  TEV_SINGLE, 0,  0, 0, 0, 0, AK_ENTER,      "Enter / send"},
+    {TK_KEY,  '`', TEV_SINGLE, 0,  0, 0, 0, 0, AK_ESC,        "Esc: cancel"},
     {TK_KEY,  '1', TEV_SINGLE, 0,  1, 0, 0, 0, AK_1,          "iTerm2 tab 1"},
     {TK_KEY,  '2', TEV_SINGLE, 0,  1, 0, 0, 0, AK_2,          "iTerm2 tab 2"},
     {TK_KEY,  '3', TEV_SINGLE, 0,  1, 0, 0, 0, AK_3,          "iTerm2 tab 3"},
@@ -225,7 +206,6 @@ const KbConfig PRESET_LAZYTYPER = {
   12
 };
 
-// 预设 profile：纯透传（所有键直接发字面字符，无映射）
 const KbConfig PRESET_PASSTHROUGH = {
   {},
   0
@@ -236,7 +216,7 @@ const KbConfig& DEFAULT_PRESET = PRESET_LAZYTYPER;
 struct PresetEntry { const char* name; const KbConfig* cfg; };
 const PresetEntry PRESETS[] = {
   {"LazyTyper + iTerm2",  &PRESET_LAZYTYPER},
-  {"纯透传（无映射）",      &PRESET_PASSTHROUGH},
+  {"Passthrough (no mapping)",      &PRESET_PASSTHROUGH},
 };
 constexpr int PRESET_COUNT = sizeof(PRESETS) / sizeof(PRESETS[0]);
 
@@ -401,8 +381,6 @@ const int WAIT_Y4         = WAIT_Y3 + WAIT_LINE_H + WAIT_LINE_GAP;
 // Flash overlay
 const int FLASH_DELAY      = 200;
 
-// 固件版本：参照 ESP-IDF 规范，Makefile 通过 -DFW_VERSION / -DFW_BUILD_DATE 注入
-// FW_VERSION 由 `git describe --tags --dirty --always --long` 生成，例 "v0.1.0-3-g034d67f-dirty"
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
 #endif
@@ -411,19 +389,14 @@ const int FLASH_DELAY      = 200;
 #endif
 const char* FIRMWARE_VERSION = FW_VERSION " (" FW_BUILD_DATE ")";
 
-// 双缓冲 sprite：所有 BLE 主屏 + flash 都画到这里，画完 pushSprite(0,0) 一次同步整屏。
 LGFX_Sprite g_canvas(&M5Cardputer.Display);
-// flash overlay 用的 banner sprite，partial push 200×60
 LGFX_Sprite g_banner(&M5Cardputer.Display);
-// banner 区域备份：showFlash 出现前先把 g_canvas 该区域拷过来，结束时直接 partial push 这个还原，
-// 避免调 drawStatus 整屏 push 引起的扫描闪烁
 LGFX_Sprite g_restore(&M5Cardputer.Display);
 const int FLASH_BANNER_W = 200;
 const int FLASH_BANNER_H = 60;
 const int FLASH_BANNER_X = (SCREEN_W - FLASH_BANNER_W) / 2;
 const int FLASH_BANNER_Y = (SCREEN_H - FLASH_BANNER_H) / 2;
 
-// 用 g_canvas 替代直接画 Display；保持函数签名不变
 #define D g_canvas
 
 void drawKeyBlock(int x, int y, int w, int h, uint16_t bg, const char* label, const char* action) {
@@ -558,10 +531,7 @@ void showFlash(const char* text, uint16_t color) {
     M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
     screenOn = true;
   }
-  // 1. 备份 banner 区域：把 g_canvas 上对应 200×60 矩形拷到 g_restore
-  //    （g_canvas 持有 BLE 主屏 framebuffer 副本，drawStatus 末尾已 push 同步过 LCD）
   g_canvas.pushSprite(&g_restore, -FLASH_BANNER_X, -FLASH_BANNER_Y);
-  // 2. 画 flash overlay 到 banner sprite，partial push 到 LCD
   g_banner.fillSprite(color);
   g_banner.setTextSize(3);
   g_banner.setTextColor(BLACK, color);
@@ -569,9 +539,7 @@ void showFlash(const char* text, uint16_t color) {
   g_banner.setCursor((FLASH_BANNER_W - tw) / 2, (FLASH_BANNER_H - FONT3_H) / 2);
   g_banner.print(text);
   g_banner.pushSprite(FLASH_BANNER_X, FLASH_BANNER_Y);
-  // 3. 等
   delay(FLASH_DELAY);
-  // 4. 用备份的 g_restore partial push 回去，避免整屏 push 引起的扫描闪烁
   g_restore.pushSprite(FLASH_BANNER_X, FLASH_BANNER_Y);
   lastActivity = millis();
 }
@@ -1018,15 +986,12 @@ void flashBtnA() {
 #endif
 
 // ============================================================
-//  WiFi 配置模式：NVS + action helpers + AP/web server
 // ============================================================
 #if IS_CARDPUTER
 
-// WiFi config 模式相关全局（提前到 loadConfig 之前，避免编译顺序问题）
 String g_wifiSsid = "";
 String g_wifiPass = "";
 String g_lastPreset = "";
-// 访问 http://cardputer-kb-XXXX.local，XXXX 是 MAC 后两字节 hex（多设备避免冲突）
 char g_mdnsName[24] = {0};
 static const char* mdnsName() {
   if (g_mdnsName[0] == 0) {
@@ -1037,7 +1002,7 @@ static const char* mdnsName() {
   return g_mdnsName;
 }
 #define MDNS_NAME mdnsName()
-const unsigned long WIFI_TIMEOUT_MS = 30000;  // 30 秒连不上就 fallback 到 AP
+const unsigned long WIFI_TIMEOUT_MS = 30000;
 unsigned long g_configEnterTime = 0;
 String g_staIp = "";
 String g_apIp = "";
@@ -1045,8 +1010,7 @@ bool g_staConnected = false;
 bool g_apMode = false;
 char g_apSsidStr[32] = {0};
 
-// 单条 binding 序列化为 10 字节
-#define BIND_BYTES (10 + BIND_COMMENT_LEN)  // 58: 10 字节 binding + 48 字节 comment
+#define BIND_BYTES (10 + BIND_COMMENT_LEN)
 static void bindingPack(uint8_t* out, const Binding& b) {
   out[0] = b.trigger;
   out[1] = b.trigger_key;
@@ -1056,7 +1020,7 @@ static void bindingPack(uint8_t* out, const Binding& b) {
   out[5] = b.cmd; out[6] = b.opt; out[7] = b.ctrl; out[8] = b.shift;
   out[9] = b.action;
   memcpy(out + 10, b.comment, BIND_COMMENT_LEN);
-  out[10 + BIND_COMMENT_LEN - 1] = 0;  // 强制 null 终止
+  out[10 + BIND_COMMENT_LEN - 1] = 0;
 }
 static void bindingUnpack(const uint8_t* in, Binding& b) {
   b.trigger     = in[0];
@@ -1072,7 +1036,6 @@ static void bindingUnpack(const uint8_t* in, Binding& b) {
 void loadConfig() {
   Preferences prefs;
   prefs.begin("kb", true);
-  // 新 schema："binds" key 存 binary blob：1 字节 count + count*BIND_BYTES
   uint8_t buf[1 + MAX_BINDINGS * BIND_BYTES];
   size_t n = prefs.getBytes("binds", buf, sizeof(buf));
   if (n >= 1 && buf[0] <= MAX_BINDINGS && n == 1 + buf[0] * BIND_BYTES) {
@@ -1087,7 +1050,6 @@ void loadConfig() {
   g_wifiPass = prefs.getString("pass", "");
   g_lastPreset = prefs.getString("preset", "");
   prefs.end();
-  // ⚠️ 开发期默认值：NVS 空时 fallback 到家里的 WiFi。push 前要改成空字符串。
   if (g_wifiSsid.length() == 0) {
     g_wifiSsid = "YOUR_SSID";
     g_wifiPass = "YOUR_PASSWORD";
@@ -1128,11 +1090,6 @@ void requestConfigBoot() {
   prefs.end();
 }
 
-// AK 枚举 → BleKeyboard library 的 HID 键值（非 char 的，return 0 = 字面字符走另外路径）
-// 返回值：高位 0x80 = 字面字符（低 7 位是 ASCII），其它 = HID 键值
-// 返回 BleKeyboard.press() 接受的字节：ASCII 字符直接返回字面值（库内部会用 _asciimap 转 HID code），
-// special keys 返回 KEY_RETURN/KEY_TAB 等 0xB0+ 高位 keycode（库内部会减 136 转 HID）。
-// 不要再用 0x80 当"ASCII 标志位"——会跟 special key 的 bit7 冲突（KEY_RETURN=0xB0 等 bit7 都是 1）。
 static uint8_t akToKey(uint8_t a) {
   switch (a) {
     case AK_ENTER:     return KEY_RETURN;
@@ -1176,7 +1133,6 @@ static uint8_t akToKey(uint8_t a) {
   return 0;
 }
 
-// 显示用的 binding 标签（"Cmd+Tab"、"Esc" 等），写入 buf
 static void formatBindingLabel(char* buf, size_t n,
                                uint8_t cmd, uint8_t opt, uint8_t ctrl, uint8_t shift,
                                const char* keyName) {
@@ -1192,7 +1148,7 @@ static void formatBindingLabel(char* buf, size_t n,
 
 static const char* akName(uint8_t a) {
   switch (a) {
-    case AK_NONE:      return "(无)";
+    case AK_NONE:      return "(none)";
     case AK_ENTER:     return "Enter";
     case AK_TAB:       return "Tab";
     case AK_ESC:       return "Esc";
@@ -1234,9 +1190,7 @@ static const char* akName(uint8_t a) {
   return "?";
 }
 
-// 通用执行器：按 binding 发出按键序列
 static void executeBinding(const Binding& b, uint16_t flashColor) {
-  // CapsLock 单按特殊处理
   if (b.action == AK_CAPS_LOCK && !b.cmd && !b.opt && !b.ctrl && !b.shift) {
     capsLocked = !capsLocked;
     bleKeyboard.write(KEY_CAPS_LOCK);
@@ -1260,7 +1214,6 @@ static void executeBinding(const Binding& b, uint16_t flashColor) {
   showFlash(label, flashColor);
 }
 
-// 在 g_config.bindings 里查找指定 trigger + event 的 binding
 static const Binding* findBinding(uint8_t trigger, uint8_t event, uint8_t trigger_key = 0) {
   for (int i = 0; i < g_config.count; i++) {
     const Binding& b = g_config.bindings[i];
@@ -1272,7 +1225,6 @@ static const Binding* findBinding(uint8_t trigger, uint8_t event, uint8_t trigge
   return nullptr;
 }
 
-// 一个 trigger 是否定义了 SINGLE 之外的事件（双击/三击/长按）——决定单击是否要等 tap window
 static bool hasMultiTap(uint8_t trigger, uint8_t trigger_key = 0) {
   for (int i = 0; i < g_config.count; i++) {
     const Binding& b = g_config.bindings[i];
@@ -1291,7 +1243,6 @@ static bool hasLongPress(uint8_t trigger, uint8_t trigger_key = 0) {
   }
   return false;
 }
-// 取该 trigger 第一个 LONG binding 的 long_ms（决定按多少 ms 触发）
 static uint16_t getLongMs(uint8_t trigger, uint8_t trigger_key = 0) {
   for (int i = 0; i < g_config.count; i++) {
     const Binding& b = g_config.bindings[i];
@@ -1302,7 +1253,6 @@ static uint16_t getLongMs(uint8_t trigger, uint8_t trigger_key = 0) {
   return LONG_PRESS_DEFAULT_MS;
 }
 
-// 多击/长按状态：每个 modifier 一份
 struct ModTapState {
   unsigned long press_start = 0;
   unsigned long last_release = 0;
@@ -1317,7 +1267,6 @@ static uint8_t tapCountToEvent(uint8_t n) {
   return TEV_SINGLE;
 }
 
-// modifier 按下时调（前一帧未按、当前帧按）
 static void onModPress(ModTapState* sp, unsigned long now) {
   sp->press_start = now;
   sp->long_fired = false;
@@ -1328,7 +1277,6 @@ static void onModPress(ModTapState* sp, unsigned long now) {
   }
 }
 
-// modifier 释放时调（前一帧按、当前帧未按）
 static void onModRelease(ModTapState* sp, unsigned long now,
                          bool usedAsModifier, uint8_t trigger, uint16_t color) {
   if (usedAsModifier || sp->long_fired) {
@@ -1367,8 +1315,6 @@ static void pollMod(ModTapState* sp, uint8_t trigger, uint16_t color, bool held)
     sp->last_release = 0;
   }
 }
-// 任意字符键的处理（normal mode 没有别的 layer 干预时）
-// 返回 true = 已被某 binding 消费；false = 走默认字面透传
 bool dispatchKeyTap(char c) {
   const Binding* b = findBinding(TK_KEY, TEV_SINGLE, (uint8_t)c);
   if (b) {
@@ -1380,12 +1326,11 @@ bool dispatchKeyTap(char c) {
   return false;
 }
 
-// AK 动作键的 dropdown 选项分组
 struct AkOption { uint8_t ak; const char* label; };
 static const AkOption AK_OPTIONS_SPECIAL[] = {
-  {AK_NONE, "(无)"}, {AK_ENTER, "Enter"}, {AK_TAB, "Tab"}, {AK_ESC, "Esc"},
+  {AK_NONE, "(none)"}, {AK_ENTER, "Enter"}, {AK_TAB, "Tab"}, {AK_ESC, "Esc"},
   {AK_BACKSPACE, "Backspace"}, {AK_DELETE, "Delete"}, {AK_SPACE, "Space"},
-  {AK_UP, "↑ 上"}, {AK_DOWN, "↓ 下"}, {AK_LEFT, "← 左"}, {AK_RIGHT, "→ 右"},
+  {AK_UP, "↑ Up"}, {AK_DOWN, "↓ Down"}, {AK_LEFT, "← Left"}, {AK_RIGHT, "→ Right"},
   {AK_PAGE_UP, "PgUp"}, {AK_PAGE_DOWN, "PgDn"}, {AK_HOME, "Home"}, {AK_END, "End"},
   {AK_CAPS_LOCK, "Caps Lock"},
 };
@@ -1395,34 +1340,33 @@ static const AkOption AK_OPTIONS_FN[] = {
   {AK_F9, "F9"}, {AK_F10, "F10"}, {AK_F11, "F11"}, {AK_F12, "F12"},
 };
 
-// 渲染 AK dropdown，optgroup 分组
 static String htmlAkSelect(const char* name, uint8_t curr) {
   String s = "<select name='"; s += name; s += "'>";
-  s += "<optgroup label='特殊键'>";
+  s += "<optgroup label='Special'>";
   for (auto& o : AK_OPTIONS_SPECIAL) {
     s += "<option value='"; s += o.ak; s += "'";
     if (o.ak == curr) s += " selected";
     s += ">"; s += o.label; s += "</option>";
   }
-  s += "</optgroup><optgroup label='功能键'>";
+  s += "</optgroup><optgroup label='Function'>";
   for (auto& o : AK_OPTIONS_FN) {
     s += "<option value='"; s += o.ak; s += "'";
     if (o.ak == curr) s += " selected";
     s += ">"; s += o.label; s += "</option>";
   }
-  s += "</optgroup><optgroup label='字母 a-z'>";
+  s += "</optgroup><optgroup label='Letters a-z'>";
   for (uint8_t a = AK_A; a <= AK_Z; a++) {
     s += "<option value='"; s += a; s += "'";
     if (a == curr) s += " selected";
     s += ">"; s += (char)('a' + (a - AK_A)); s += "</option>";
   }
-  s += "</optgroup><optgroup label='数字 0-9'>";
+  s += "</optgroup><optgroup label='Digits 0-9'>";
   for (uint8_t a = AK_0; a <= AK_9; a++) {
     s += "<option value='"; s += a; s += "'";
     if (a == curr) s += " selected";
     s += ">"; s += (char)('0' + (a - AK_0)); s += "</option>";
   }
-  s += "</optgroup><optgroup label='符号'>";
+  s += "</optgroup><optgroup label='Symbols'>";
   for (uint8_t a = AK_BACKTICK; a <= AK_SLASH; a++) {
     s += "<option value='"; s += a; s += "'";
     if (a == curr) s += " selected";
@@ -1432,13 +1376,11 @@ static String htmlAkSelect(const char* name, uint8_t curr) {
   return s;
 }
 
-// 把 binding 序列化成 JSON 对象（用于 GET /api/config 和 GET /api/presets）
-// comment 里的 " 和 \ 转义后再嵌入
 static String escapeJsonString(const char* s) {
   String out;
   for (const char* p = s; *p; p++) {
     if (*p == '"' || *p == '\\') { out += '\\'; out += *p; }
-    else if ((uint8_t)*p < 0x20) continue;  // 忽略控制字符
+    else if ((uint8_t)*p < 0x20) continue;
     else out += *p;
   }
   return out;
@@ -1473,14 +1415,13 @@ const char JS_CODE[] =
 "}"
 "return h+\"</select>\";"
 "}"
-// 字符 trigger 的友好名（用于 option title hover 提示）
-"const SYM_NAMES={32:'空格 Space',9:'Tab',10:'回车 Enter',8:'退格 Backspace',96:'反引号 backtick `',45:'减号 -',61:'等号 =',91:'左方括号 [',93:'右方括号 ]',92:'反斜杠 \\\\',59:'分号 ;',39:'单引号 \\'',44:'逗号 ,',46:'句号 .',47:'斜杠 /'};"
+"const SYM_NAMES={32:'Space',9:'Tab',10:'Enter',8:'Backspace',96:'backtick `',45:'minus -',61:'equals =',91:'left bracket [',93:'right bracket ]',92:'backslash \\\\',59:'semicolon ;',39:'apostrophe \\'',44:'comma ,',46:'period .',47:'slash /'};"
 "function trigSelectHtml(curr,key){"
 "let cur='';"
 "if((curr>=1&&curr<=3)||curr==5||curr==6)cur='m'+curr;"
 "else if(curr==4&&key)cur='k'+key;"
 "let h=\"<select class='b-trig'>\";"
-"h+=\"<optgroup label='修饰键'>\";"
+"h+=\"<optgroup label='Modifiers'>\";"
 "for(const [v,l] of [['m1','Ctrl'],['m2','Opt'],['m3','Fn'],['m5','Aa (Shift)'],['m6','Alt']])"
 "h+=`<option value='${v}' ${cur==v?'selected':''} title='${l}'>${l}</option>`;"
 "h+=\"</optgroup>\";"
@@ -1501,7 +1442,7 @@ const char JS_CODE[] =
 "for(const v in EVENTS) h+=`<option value='${v}' ${v==curr?'selected':''}>${EVENTS[v]}</option>`;"
 "h+=\"</select>\";"
 "h+=`<span class='long-row' style='display:${showLong}'>`;"
-"h+=`<input type='number' class='b-longms' min='100' max='5000' step='50' value='${longMs||500}' title='长按毫秒'>`;"
+"h+=`<input type='number' class='b-longms' min='100' max='5000' step='50' value='${longMs||500}' title='Long press ms'>`;"
 "h+=\"<span class='unit'>ms</span>\";"
 "h+=\"</span>\";"
 "return h;"
@@ -1522,10 +1463,10 @@ const char JS_CODE[] =
 "<td class='col-mod'><input type='checkbox' class='b-ctrl' ${b.ctrl?'checked':''}></td>"
 "<td class='col-mod'><input type='checkbox' class='b-shift' ${b.shift?'checked':''}></td>"
 "<td class='col-act'>${akSelectHtml(b.action)}</td>"
-"<td class='col-del'><button type='button' class='del' title='删除这条映射' onclick='delRowFn(this)'>×</button></td>"
+"<td class='col-del'><button type='button' class='del' title='Delete this binding' onclick='delRowFn(this)'>×</button></td>"
 "</tr>"
 "<tr class='bind-cmt-row'><td colspan='8'>"
-"<input type='text' class='b-comment' maxlength='63' placeholder='说明（可选，便于自己理解，最多约 20 个汉字）' value='${escAttr(b.comment)}'>"
+"<input type='text' class='b-comment' maxlength='63' placeholder='Note (optional, ~60 chars)' value='${escAttr(b.comment)}'>"
 "</td></tr>`;"
 "}"
 "function addRow(b){"
@@ -1576,7 +1517,6 @@ const char JS_CODE[] =
 "const p=presets.find(x=>x.name===name);"
 "if(!p)return;"
 "if(p.bindings.length===0){clearRows();highlightConflicts();return;}"
-// 合并：preset 定义的 trigger 覆盖现有，未定义的保留
 "const merged=mergeBindings(collectBindings(),p.bindings);"
 "loadBindings(merged);"
 "highlightConflicts();"
@@ -1593,7 +1533,6 @@ const char JS_CODE[] =
 "document.getElementById('binds').addEventListener('change',highlightConflicts);"
 "highlightConflicts();"
 "}"
-// 找出冲突：trigger+event+key 完全相同的 row 标红
 "function highlightConflicts(){"
 "const rows=document.querySelectorAll('.bind-row');"
 "rows.forEach(r=>{r.classList.remove('conflict');const c=r.nextElementSibling;if(c&&c.classList.contains('bind-cmt-row'))c.classList.remove('conflict');});"
@@ -1611,7 +1550,7 @@ const char JS_CODE[] =
 "return conflicts.size;"
 "}"
 "async function saveAll(){"
-"if(highlightConflicts()>0){if(!confirm('存在冲突的映射（红色行），确定保存？'))return;}"
+"if(highlightConflicts()>0){if(!confirm('Conflicts exist (red rows). Save anyway?'))return;}"
 "const data={"
 "ssid:document.getElementById('ssid').value,"
 "pass:document.getElementById('pass').value,"
@@ -1619,9 +1558,8 @@ const char JS_CODE[] =
 "bindings:collectBindings()"
 "};"
 "const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});"
-"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>已保存，正在重启…</h2>\";"
+"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>Saved. Rebooting...</h2>\";"
 "}"
-// 导出当前表单为 JSON 文件下载
 "function exportConfig(){"
 "const cfg={last_preset:document.getElementById('preset').value||'',bindings:collectBindings()};"
 "const blob=new Blob([JSON.stringify(cfg,null,2)],{type:'application/json'});"
@@ -1631,32 +1569,30 @@ const char JS_CODE[] =
 "a.click();"
 "URL.revokeObjectURL(a.href);"
 "}"
-// 导入：粘贴 JSON 文本，加载到表单（不立即保存，需用户点保存按钮）
 "function importConfig(){"
-"const txt=prompt('粘贴 JSON 配置（导出的格式）：');"
+"const txt=prompt('Paste JSON config (exported format):');"
 "if(!txt)return;"
 "try{const cfg=JSON.parse(txt);"
 "if(!cfg.bindings||!Array.isArray(cfg.bindings))throw new Error('missing bindings array');"
 "loadBindings(cfg.bindings);"
 "if(cfg.last_preset)document.getElementById('preset').value=cfg.last_preset;"
 "highlightConflicts();"
-"alert('已加载，记得点保存并重启');"
-"}catch(e){alert('解析失败：'+e.message);}"
+"alert('Loaded. Click Save & Reboot to apply.');"
+"}catch(e){alert('Parse failed: '+e.message);}"
 "}"
 "async function cancelAll(){"
 "await fetch('/cancel',{method:'POST'});"
-"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>正在重启…</h2>\";"
+"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>Rebooting...</h2>\";"
 "}"
-// 切到 AP 模式：服务端写 force_ap flag 后重启进 AP
 "async function switchToAp(){"
-"if(!confirm('设备会重启并进入 AP 模式。\\n下次进入配置模式时仍走 STA 优先。继续？'))return;"
+"if(!confirm('Device will reboot into AP mode.\\nNext config-mode entry still tries STA first. Continue?'))return;"
 "await fetch('/api/switch-to-ap',{method:'POST'});"
-"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>正在切换到 AP 模式…<br><small>稍后请连 CardPuter-KB-CFG-XXXX 这个 WiFi 后访问 http://192.168.4.1/</small></h2>\";"
+"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>Switching to AP...<br><small>Connect to CardPuter-KB-XXXX WiFi then visit http://192.168.4.1/</small></h2>\";"
 "}"
 "async function scanWifi(){"
-"const el=document.getElementById('wifi-list');el.textContent='扫描中…';"
+"const el=document.getElementById('wifi-list');el.textContent='Scanning...';"
 "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();"
-"if(!nets.length){el.textContent='没找到 WiFi';return}"
+"if(!nets.length){el.textContent='No WiFi found';return}"
 "el.innerHTML='';"
 "const bars=(r)=>{const lvl=r>=-50?4:r>=-60?3:r>=-70?2:r>=-80?1:0;return '▰'.repeat(lvl)+'▱'.repeat(4-lvl);};"
 "const barColor=(r)=>r>=-60?'#10b981':r>=-75?'#f59e0b':'#dc2626';"
@@ -1670,7 +1606,7 @@ const char JS_CODE[] =
 "a.onclick=(e)=>{e.preventDefault();document.getElementById('ssid').value=n.ssid;document.getElementById('pass').focus();};"
 "el.appendChild(a);"
 "}"
-"}catch(e){el.textContent='扫描失败：'+e}"
+"}catch(e){el.textContent='Scan failed: '+e}"
 "}"
 "init();";
 
@@ -1702,7 +1638,6 @@ void handleRoot() {
   body += ".banner small{opacity:.85;font-size:.85em}";
   body += ".banner button.switch-mode{margin-top:.4em;background:#fff;color:#374151;border:1px solid #9ca3af;border-radius:4px;padding:.3em .8em;cursor:pointer;font-size:.85em}";
   body += ".banner button.switch-mode:hover{background:#f3f4f6}";
-  // 用 <table> 让 header 和 row 列宽自动对齐
   body += "table.bind-table{width:100%;border-collapse:collapse;margin-top:.5em}";
   body += "table.bind-table th{font-size:.8em;color:#666;font-weight:600;padding:.4em .2em;border-bottom:1px solid #ccc;text-align:center;white-space:nowrap}";
   body += "table.bind-table td{padding:.4em .2em;border-bottom:1px solid #eee;text-align:center;vertical-align:middle}";
@@ -1718,7 +1653,6 @@ void handleRoot() {
   body += "table.bind-table .event-cell select{width:100%;min-width:0}";
   body += "table.bind-table input[type=checkbox]{transform:scale(1.2);margin:0}";
   body += "table.bind-table select,table.bind-table input[type=text]{font-size:.9em;padding:.3em;width:100%;box-sizing:border-box}";
-  // del 按钮：尺寸 / 字体 / 行高都跟 td 内 select 对齐，避免 baseline 错位
   body += "table.bind-table td.col-del{line-height:0}";
   body += "table.bind-table .del{background:none;border:0;cursor:pointer;padding:0;margin:0;font-size:1.1em;color:#999;width:1.8em;height:1.8em;text-align:center;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;line-height:1}";
   body += "table.bind-table .del:hover{background:#fee;color:#c00}";
@@ -1732,97 +1666,94 @@ void handleRoot() {
   body += "table.bind-table tr.bind-row.conflict td,table.bind-table tr.bind-cmt-row.conflict td{background:#fef2f2}";
   body += "table.bind-table tr.bind-row.conflict td:first-child{box-shadow:inset 3px 0 0 #dc2626}";
   body += "</style></head><body>";
-  body += "<h2>CardPuter Keyboard 配置</h2>";
+  body += "<h2>CardPuter Keyboard Config</h2>";
 
-  // 顶部状态横幅占位（下方 body.replace 填入）
   body += "[BANNER]";
 
-  body += "<fieldset><legend>预设方案（一键载入到下方表单）</legend>";
+  body += "<fieldset><legend>Preset (one-click load below)</legend>";
   body += "<select id='preset' onchange='loadPreset(this.value)'>";
-  body += "<option value=''>-- 选择预设 --</option>";
+  body += "<option value=''>-- Select preset --</option>";
   body += "</select>";
   body += "</fieldset>";
 
-  body += "<fieldset><legend>WiFi（连家庭网络）</legend>";
+  body += "<fieldset><legend>WiFi (home network)</legend>";
   body += "<label>SSID</label><input id='ssid' value='";
   body += g_wifiSsid;
   body += "'>";
-  body += "<label>密码</label><input id='pass' type='password' placeholder='";
-  body += g_wifiPass.length() > 0 ? "(已存，留空保留)" : "";
+  body += "<label>Password</label><input id='pass' type='password' placeholder='";
+  body += g_wifiPass.length() > 0 ? "(saved, leave blank to keep)" : "";
   body += "'>";
-  body += "<button type='button' class='scan' onclick='scanWifi()'>扫描附近 WiFi</button>";
+  body += "<button type='button' class='scan' onclick='scanWifi()'>Scan WiFi</button>";
   body += "<div id='wifi-list'></div>";
   body += "</fieldset>";
 
-  body += "<fieldset><legend>键映射（每行 = 一条触发→动作）</legend>";
+  body += "<fieldset><legend>Bindings (one row = trigger → action)</legend>";
   body += "<table class='bind-table'><thead><tr>";
-  body += "<th class='col-trig'>触发键</th>";
-  body += "<th class='col-event'>事件</th>";
+  body += "<th class='col-trig'>Trigger</th>";
+  body += "<th class='col-event'>Event</th>";
   body += "<th class='col-mod'>Cmd</th><th class='col-mod'>Opt</th><th class='col-mod'>Ctrl</th><th class='col-mod'>Shift</th>";
-  body += "<th class='col-act'>主键</th>";
+  body += "<th class='col-act'>Action</th>";
   body += "<th class='col-del'></th>";
   body += "</tr></thead><tbody id='binds'></tbody></table>";
   body += "<div id='conflict-banner' style='display:none;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;padding:.5em .8em;border-radius:4px;margin-top:.5em;font-size:.9em'>";
-  body += "⚠️ 红色行存在重复触发（同 trigger + 事件），保存前请检查";
+  body += "Red rows have duplicate triggers — please review before save";
   body += "</div>";
   body += "<div style='margin-top:.5em;display:flex;gap:.5em;flex-wrap:wrap;align-items:center'>";
-  body += "<button type='button' class='add-btn' onclick='addRow()'>+ 增加映射</button>";
-  body += "<button type='button' class='io-btn' onclick='exportConfig()'>导出 JSON</button>";
-  body += "<button type='button' class='io-btn' onclick='importConfig()'>导入 JSON</button>";
+  body += "<button type='button' class='add-btn' onclick='addRow()'>+ Add binding</button>";
+  body += "<button type='button' class='io-btn' onclick='exportConfig()'>Export JSON</button>";
+  body += "<button type='button' class='io-btn' onclick='importConfig()'>Import JSON</button>";
   body += "</div>";
   body += "</fieldset>";
 
-  body += "<button class='save' type='button' onclick='saveAll()'>保存并重启</button>";
-  body += "<button class='reboot' type='button' onclick='cancelAll()'>放弃 / 直接重启</button>";
+  body += "<button class='save' type='button' onclick='saveAll()'>Save & Reboot</button>";
+  body += "<button class='reboot' type='button' onclick='cancelAll()'>Cancel & Reboot</button>";
 
   // banner
   String banner;
   if (g_apMode) {
-    banner = "<div class='banner banner-ap'><b>📡 AP 模式</b><br>"
-             "SSID <code>" + String(g_apSsidStr) + "</code>，连 AP 后访问 <code>http://" + g_apIp + "/</code><br>"
-             "<small>下面填家庭 WiFi 保存后会切到 STA 模式（AP 会消失）。</small></div>";
+    banner = "<div class='banner banner-ap'><b>📡 AP MODE</b><br>"
+             "SSID <code>" + String(g_apSsidStr) + "</code>, then connect AP and visit <code>http://" + g_apIp + "/</code><br>"
+             "<small>Fill WiFi below and save to switch to STA (AP closes).</small></div>";
   } else {
-    banner = "<div class='banner banner-sta'><b>📶 STA 模式</b>，已连 <b>" + g_wifiSsid + "</b>"
-             "（信号 " + String(WiFi.RSSI()) + " dBm）<br>"
+    banner = "<div class='banner banner-sta'><b>📶 STA MODE</b>, connected to <b>" + g_wifiSsid + "</b>"
+             "(RSSI " + String(WiFi.RSSI()) + " dBm)<br>"
              "🔗 <code>http://" + g_staIp + "/</code>"
-             " 或 <code>http://" + String(MDNS_NAME) + ".local/</code><br>"
-             "<button class='switch-mode' type='button' onclick='switchToAp()'>切换到 AP 模式（重启进入）</button></div>";
+             " or <code>http://" + String(MDNS_NAME) + ".local/</code><br>"
+             "<button class='switch-mode' type='button' onclick='switchToAp()'>Switch to AP (reboot)</button></div>";
   }
   body.replace("[BANNER]", banner);
 
   // ===== JS =====
   body += "<script>";
 
-  // AK 主键 dropdown 的选项数据（C++ 序列化成 JS 数组）
   body += "const AK_OPTS=[";
-  body += "{g:'特殊键',o:[";
+  body += "{g:'Special',o:[";
   for (size_t i = 0; i < sizeof(AK_OPTIONS_SPECIAL)/sizeof(AK_OPTIONS_SPECIAL[0]); i++) {
     if (i) body += ",";
     body += "[" + String(AK_OPTIONS_SPECIAL[i].ak) + ",'" + AK_OPTIONS_SPECIAL[i].label + "']";
   }
   body += "]},";
-  body += "{g:'功能键',o:[";
+  body += "{g:'Function',o:[";
   for (size_t i = 0; i < sizeof(AK_OPTIONS_FN)/sizeof(AK_OPTIONS_FN[0]); i++) {
     if (i) body += ",";
     body += "[" + String(AK_OPTIONS_FN[i].ak) + ",'" + AK_OPTIONS_FN[i].label + "']";
   }
   body += "]},";
-  body += "{g:'字母 a-z',o:[";
+  body += "{g:'Letters a-z',o:[";
   for (uint8_t a = AK_A; a <= AK_Z; a++) {
     if (a > AK_A) body += ",";
     body += "[" + String(a) + ",'" + (char)('a' + (a - AK_A)) + "']";
   }
   body += "]},";
-  body += "{g:'数字 0-9',o:[";
+  body += "{g:'Digits 0-9',o:[";
   for (uint8_t a = AK_0; a <= AK_9; a++) {
     if (a > AK_0) body += ",";
     body += "[" + String(a) + ",'" + (char)('0' + (a - AK_0)) + "']";
   }
   body += "]},";
-  body += "{g:'符号',o:[";
+  body += "{g:'Symbols',o:[";
   for (uint8_t a = AK_BACKTICK; a <= AK_SLASH; a++) {
     if (a > AK_BACKTICK) body += ",";
-    // 用 JSON 风格双引号字符串 + 转义，反斜杠/单引号才不会破 JS
     const char* nm = akName(a);
     String esc;
     for (const char* p = nm; *p; p++) {
@@ -1833,13 +1764,10 @@ void handleRoot() {
   }
   body += "]}];";
 
-  // trigger 字面键选项：value 用 ASCII char code，label 用字符自身或友好名。
-  // 列表覆盖 cardputer 4×14 矩阵里所有非 modifier 的物理键
-  // （3 个 modifier Ctrl/Opt/Fn 在上面单独列；ALT 不参与 binding）
   body += "const TRIG_KEY_OPTS=[";
-  body += "{g:'特殊键',o:[";
+  body += "{g:'Special',o:[";
   body += "[32,\"Space\"],[9,\"Tab\"],[10,\"Enter\"],[8,\"Backspace\"]";
-  body += "]},{g:'数字',o:[";
+  body += "]},{g:'Digits',o:[";
   {
     const char* row = "1234567890";
     for (const char* p = row; *p; p++) {
@@ -1847,12 +1775,12 @@ void handleRoot() {
       body += "[" + String((int)(uint8_t)*p) + ",\"" + *p + "\"]";
     }
   }
-  body += "]},{g:'字母',o:[";
+  body += "]},{g:'Letters',o:[";
   for (char c = 'a'; c <= 'z'; c++) {
     if (c != 'a') body += ",";
     body += "[" + String((int)c) + ",\"" + c + "\"]";
   }
-  body += "]},{g:'符号',o:[";
+  body += "]},{g:'Symbols',o:[";
   {
     const char* row = "`-=[]\\;',./";
     for (const char* p = row; *p; p++) {
@@ -1864,15 +1792,13 @@ void handleRoot() {
     }
   }
   body += "]}];";
-  body += "const EVENTS={0:'单击',1:'双击',2:'三击',3:'长按'};";
+  body += "const EVENTS={0:'Single',1:'Double',2:'Triple',3:'Long'};";
 
-  // 渲染一行 binding（addRow 调用，row 是 binding 对象）
   body += JS_CODE;
   body += "</script></body></html>";
   g_web->send(200, "text/html; charset=utf-8", body);
 }
 
-// /api/config — 当前配置 JSON
 void handleApiConfig() {
   String s = "{\"last_preset\":\"";
   s += escapeJsonString(g_lastPreset.c_str());
@@ -1882,7 +1808,6 @@ void handleApiConfig() {
   g_web->send(200, "application/json", s);
 }
 
-// /api/presets — 内置预设列表
 void handleApiPresets() {
   String s = "[";
   for (int i = 0; i < PRESET_COUNT; i++) {
@@ -1895,7 +1820,6 @@ void handleApiPresets() {
   g_web->send(200, "application/json", s);
 }
 
-// 极简 JSON 解析 helper：找 "key":数字 / "key":"值"
 static int jsonFindInt(const String& body, const String& key, int def = 0) {
   String pat = "\"" + key + "\":";
   int p = body.indexOf(pat);
@@ -1913,18 +1837,16 @@ static String jsonFindStr(const String& body, const String& key) {
 }
 
 void handleSave() {
-  // POST body 必为 JSON {ssid, pass, bindings:[...]}
   String body = g_web->arg("plain");
   if (body.length() == 0) {
     g_web->send(400, "text/plain", "expected JSON body"); return;
   }
 
-  // 解析 bindings 数组
   int bArrStart = body.indexOf("\"bindings\":[");
   if (bArrStart < 0) {
     g_web->send(400, "text/plain", "missing bindings"); return;
   }
-  int p = bArrStart + 12;  // 跳过 "bindings":[
+  int p = bArrStart + 12;
   int count = 0;
   while (p < (int)body.length() && count < MAX_BINDINGS) {
     int objStart = body.indexOf('{', p);
@@ -1981,18 +1903,15 @@ void handleSave() {
 void handleCancel() {
   g_web->send(200, "text/html; charset=utf-8",
               "<html><body style='font-family:system-ui;text-align:center;margin-top:3em'>"
-              "<h2>正在重启…</h2></body></html>");
+              "<h2>Rebooting...</h2></body></html>");
   delay(500);
   esp_restart();
 }
 
-// ===== 配置模式：STA 连家庭 WiFi（写死，仅试验用）=====
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
 
-// 这些全局在 loadConfig 之前已声明（forward 顺序需要）
 
-// 画 AP 模式下客户端那行：等待 / 数量。两者都 size=2 大字（保证宽度不超出主区 240-22=218 px）。
 static void drawApClientLine() {
   M5Cardputer.Display.fillRect(22, 70, SCREEN_W - 22, 18, BLACK);
   int n = WiFi.softAPgetStationNum();
@@ -2000,19 +1919,18 @@ static void drawApClientLine() {
   M5Cardputer.Display.setCursor(28, 70);
   if (n == 0) {
     M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
-    M5Cardputer.Display.print("Waiting client");  // 14 字符 × 12 = 168 px ≤ 218 可用
+    M5Cardputer.Display.print("Waiting client");
   } else {
     M5Cardputer.Display.setTextColor(0x07E0 /* green */, BLACK);
-    M5Cardputer.Display.printf("%d client%s", n, n > 1 ? "s" : "");  // 最长 "16 clients" = 120 px
+    M5Cardputer.Display.printf("%d client%s", n, n > 1 ? "s" : "");
   }
 }
 
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
 
-  // 左侧装饰条：深紫底色 + 逆时针 90° 旋转的 "CONFIG"
   const int barW = 22;
-  const uint16_t barBg = 0x4810; /* 深紫 RGB565 (72,0,128) #480080 */
+  const uint16_t barBg = 0x4810; /* dark purple RGB565 (72,0,128) #480080 */
   M5Cardputer.Display.fillRect(0, 0, barW, SCREEN_H, barBg);
   {
     LGFX_Sprite sprite(&M5Cardputer.Display);
@@ -2028,11 +1946,8 @@ void drawConfigScreen(const char* status, const String& ip) {
     sprite.deleteSprite();
   }
 
-  // 顶栏：模式 + SSID 合并为大字一行；颜色编码连接状态
-  // STA 已连=绿；STA 连接中=黄+...；STA 失败=红；AP=橙
   M5Cardputer.Display.setTextSize(2);
   if (g_apMode) {
-    // AP MODE 顶栏（橙色）
     M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
     M5Cardputer.Display.setCursor(28, 4);
     M5Cardputer.Display.print("AP MODE");
@@ -2050,17 +1965,14 @@ void drawConfigScreen(const char* status, const String& ip) {
     M5Cardputer.Display.print(title);
   }
 
-  // 主体：访问入口（最大字体，醒目）。IP 和 mDNS/SSID 用不同颜色区分。
   M5Cardputer.Display.setTextSize(2);
   if (g_apMode) {
-    // AP: SSID + IP + 客户端状态
     M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
     M5Cardputer.Display.setCursor(28, 24);
     M5Cardputer.Display.print(g_apSsidStr);  // CardPuter-KB-XXXX
     M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
     M5Cardputer.Display.setCursor(28, 46);
     M5Cardputer.Display.print(ip);            // 192.168.4.1
-    // 客户端状态：等待 / 唯一客户端 IP / 多客户端时给数量。size=2 跟主体齐平。
     drawApClientLine();
   } else {
     // STA: IP + mDNS hostname + .local
@@ -2074,7 +1986,6 @@ void drawConfigScreen(const char* status, const String& ip) {
     M5Cardputer.Display.print(".local");
   }
 
-  // 底部：键盘提示（size=2，跟主体齐平大小）。STA 和 AP 都给两条提示。
   M5Cardputer.Display.setTextSize(2);
   M5Cardputer.Display.setTextColor(0xFD20 /* orange */, BLACK);
   M5Cardputer.Display.setCursor(28, 95);
@@ -2083,7 +1994,6 @@ void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.print("[Q] Exit to BLE");
 }
 
-// /api/status — JSON 健康状态
 void handleStatus() {
   int rssi = WiFi.RSSI();
   unsigned long uptime = millis() / 1000;
@@ -2104,7 +2014,6 @@ void handleStatus() {
   g_web->send(200, "application/json", String(buf));
 }
 
-// /api/screenshot — 当前屏幕 BMP（240x135 16bpp → 24bpp BMP）
 void handleScreenshot() {
   const uint32_t W = 240, H = 135;
   uint32_t rowSize = (W * 3 + 3) & ~3;  // 720
@@ -2143,7 +2052,6 @@ void handleScreenshot() {
   }
 }
 
-// /api/wifi/scan — 列附近 WiFi（参考 audio-recorder 实现）
 void handleWifiScan() {
   int n = WiFi.scanNetworks(false, false, false, 300);
   if (n < 0) n = 0;
@@ -2182,7 +2090,6 @@ static void registerWebRoutes() {
 static void startApMode() {
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_BT);
-  // AP SSID 跟 mDNS hostname 同后缀，用户看 WiFi 列表能识别是哪台设备；缩短到一行 size=2 能放下
   snprintf(g_apSsidStr, sizeof(g_apSsidStr), "CardPuter-KB-%02x%02x", mac[4], mac[5]);
 
   WiFi.mode(WIFI_AP);
@@ -2235,7 +2142,6 @@ void setupConfigMode() {
   delay(100);
   Serial.printf("[config] enter, stored ssid='%s'\n", g_wifiSsid.c_str());
 
-  // 检查 force_ap flag（用户在 STA 模式下点了"切到 AP"）
   bool forceAp = false;
   {
     Preferences prefs;
@@ -2245,7 +2151,6 @@ void setupConfigMode() {
     prefs.end();
   }
 
-  // 强制 AP / 没有 stored creds / STA 失败 → AP；否则 STA
   if (forceAp) {
     Serial.println("[config] force_ap flag set, going AP");
     startApMode();
@@ -2255,7 +2160,6 @@ void setupConfigMode() {
   g_configEnterTime = millis();
 }
 
-// /api/switch-to-ap — 用户在 STA 模式想切到 AP
 void handleSwitchAp() {
   Preferences prefs;
   prefs.begin("kb", false);
@@ -2269,14 +2173,11 @@ void handleSwitchAp() {
 
 void configModeLoop() {
   if (g_web) g_web->handleClient();
-  // WiFi 掉线后自动重启回正常模式（避免卡死）
   if (g_staConnected && WiFi.status() != WL_CONNECTED) {
     delay(3000);
     if (WiFi.status() != WL_CONNECTED) esp_restart();
   }
 
-  // 配置模式下读物理键盘：'a' 在两个模式下意义不同，'q' 退出回 BLE
-  // 重启前先画一个统一的"切换中"过渡屏，避免 GRAM 残留旧内容 + boot 黑屏的两次闪烁
   M5Cardputer.update();
   if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
     auto& keys = M5Cardputer.Keyboard.keysState();
@@ -2310,7 +2211,6 @@ void configModeLoop() {
     }
   }
 
-  // AP 模式：每秒查 stationNum；变化时调 drawApClientLine 重画那行（含 IP）
   static unsigned long lastApRefresh = 0;
   static int lastStationNum = -1;
   if (g_apMode && millis() - lastApRefresh > 1000) {
@@ -2341,7 +2241,6 @@ void setup() {
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(SCREEN_BRIGHTNESS);
   M5Cardputer.Display.fillScreen(BLACK);
-  // 立即画 boot splash，避免 loadConfig + setupConfigMode 期间用户看到 1-2 秒黑屏
   {
     M5Cardputer.Display.setTextSize(3);
     M5Cardputer.Display.setTextColor(0xFFE0, BLACK);
@@ -2350,7 +2249,6 @@ void setup() {
     M5Cardputer.Display.setCursor((SCREEN_W - tw) / 2, (SCREEN_H - FONT3_H) / 2);
     M5Cardputer.Display.print(msg);
   }
-  // BLE 主屏 + flash overlay 用 sprite 双缓冲，消除整屏重画闪烁
   g_canvas.setPsram(true);
   g_banner.setPsram(true);
   g_restore.setPsram(true);
@@ -2360,7 +2258,6 @@ void setup() {
   Serial.printf("[boot] firmware: %s\n", FIRMWARE_VERSION);
   Serial.println("[boot] M5Cardputer ok");
 
-  // 进配置模式标志（防御：失败默认 false，把它放在 BLE 之前是为了节省 BLE 不必要的初始化）
   bool wantConfig = false;
   {
     Preferences p;
@@ -2418,8 +2315,6 @@ void setup() {
 
 void loop() {
 #if IS_CARDPUTER
-  // 远程触发：BLE 回调里检测到 host 反复切 Caps Lock 后置标志，main loop 这里执行重启
-  // （注意：xyb 的 Mac 把 Caps Lock 改成了 IME 切换，BLE 路径暂时无效，靠下面 USB 串口）
   if (g_remote_trigger_fired) {
     M5Cardputer.Display.fillScreen(BLACK);
     M5Cardputer.Display.setTextColor(TFT_YELLOW, BLACK);
@@ -2430,10 +2325,6 @@ void loop() {
     requestConfigBoot();
     esp_restart();
   }
-  // 开发期备用串口命令：
-  //   "config\n"           → 进配置模式
-  //   "wifi <ssid> <pass>" → 写 WiFi creds 到 NVS（不重启）
-  //   "wifi-clear\n"       → 清掉 NVS 里的 ssid/pass
   static char serialBuf[96];
   static uint8_t serialIdx = 0;
   while (Serial.available()) {
@@ -2565,7 +2456,6 @@ void loop() {
   // CardPuter keyboard input
   if (!connected) { delay(100); return; }
 
-  // 每帧轮询 modifier 多击/长按状态（即使 keyState 没变也要触发 tap window 结束动作）
   {
     auto& _ks = M5Cardputer.Keyboard.keysState();
     pollMod(&ctrlState,  TK_CTRL,  COL_KEY_FN,  _ks.ctrl);
@@ -2574,12 +2464,9 @@ void loop() {
     pollMod(&shiftState, TK_SHIFT, TFT_CYAN,    _ks.shift);
     pollMod(&altState,   TK_ALT,   TFT_MAGENTA, _ks.alt);
 
-    // Fn 长按 5 秒进配置模式：必须每帧跑（按住不动时 isChange()==false 进不去下面的 block）
     unsigned long _now = millis();
     if (_ks.fn && !fnUsedAsModifier && fnPressStart > 0
         && (_now - fnPressStart >= FN_LONG_PRESS_MS)) {
-      // 不调 showFlash —— 它末尾会 drawStatus() 把 BLE 主屏画回来，
-      // 后面 delay 期间用户会看到 BLE 主屏，体感是"闪一下回 BLE 才进 config"
       M5Cardputer.Display.fillScreen(TFT_YELLOW);
       M5Cardputer.Display.setTextSize(3);
       M5Cardputer.Display.setTextColor(BLACK);
@@ -2606,7 +2493,6 @@ void loop() {
     bool shiftOn  = keys.shift;
     bool altNow   = keys.alt;
 
-    // --- Modifier 按下边沿：reset usedAsModifier + 调 onModPress ---
     unsigned long _now = millis();
     if (fnNow && !fnPrevHeld)         { fnUsedAsModifier = false; fnPressStart = _now; onModPress(&fnState, _now); }
     if (ctrlNow && !ctrlPrevHeld)     { ctrlUsedAsModifier = false; onModPress(&ctrlState, _now); }
@@ -2614,10 +2500,9 @@ void loop() {
     if (shiftOn && !shiftPrevHeld)    { shiftUsedAsModifier = false; onModPress(&shiftState, _now); }
     if (altNow && !altPrevHeld)       { altUsedAsModifier = false; onModPress(&altState, _now); }
 
-    // --- Modifier 释放边沿：调 onModRelease ---
     if (!fnNow && fnPrevHeld) {
       onModRelease(&fnState, _now, fnUsedAsModifier, TK_FN, COL_KEY_ENT);
-      fnPressStart = 0;  // 清零，避免下次按 Fn 时外层每帧检测拿到旧 fnPressStart 立刻触发
+      fnPressStart = 0;
       screenWake();
     }
     if (!ctrlNow && ctrlPrevHeld) {
@@ -2646,7 +2531,7 @@ void loop() {
     bool modCtrl  = ctrlNow;  // Ctrl held → BLE Ctrl modifier
     bool modOpt   = optNow;   // Opt held  → BLE Alt/Option modifier
     bool modShift = shiftOn;  // Shift held → BLE Shift modifier
-    bool modAlt   = altNow;   // Alt held  → BLE Alt modifier (与 Opt 都映射 LEFT_ALT，硬件上互为冗余)
+    bool modAlt   = altNow;
 
     // Helper: press active BLE modifiers
     #define PRESS_MODS() do { \
@@ -2702,7 +2587,6 @@ void loop() {
           bleKeyboard.press(key);
           bleKeyboard.releaseAll();
         } else {
-          // Normal mode：按 binding 列表查映射，没找到就字面透传
           if (!dispatchKeyTap(c)) {
             bleKeyboard.write(c);
           }
@@ -2712,7 +2596,6 @@ void loop() {
       // Special keys via boolean flags.
       // Enter/del/tab are only in flags (not in keys.word).
       // Space is in BOTH flag and word per M5Cardputer lib; word loop skips it so this is the single source of truth.
-      // Normal mode 下先查 binding，命中则消费；带 modifier 时直接透传不查 binding
       bool noLayer = !modCtrl && !modOpt && !fnNow;
       if (keys.enter) {
         if (!(noLayer && dispatchKeyTap('\n'))) SEND_WITH_MODS(KEY_RETURN);
