@@ -1050,10 +1050,8 @@ void loadConfig() {
   g_wifiPass = prefs.getString("pass", "");
   g_lastPreset = prefs.getString("preset", "");
   prefs.end();
-  if (g_wifiSsid.length() == 0) {
-    g_wifiSsid = "YOUR_SSID";
-    g_wifiPass = "YOUR_PASSWORD";
-  }
+  // Empty SSID is fine: setupConfigMode falls through to AP, and a USB serial
+  // `wifi <ssid> <pass>` line can pre-fill creds without entering AP mode.
 }
 void saveConfig() {
   Preferences prefs;
