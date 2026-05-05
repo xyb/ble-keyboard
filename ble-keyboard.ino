@@ -1009,6 +1009,7 @@ String g_apIp = "";
 bool g_staConnected = false;
 bool g_apMode = false;
 char g_apSsidStr[32] = {0};
+char g_apPass[16]    = {0};
 
 #define BIND_BYTES (10 + BIND_COMMENT_LEN)
 static void bindingPack(uint8_t* out, const Binding& b) {
@@ -1033,17 +1034,31 @@ static void bindingUnpack(const uint8_t* in, Binding& b) {
   b.comment[BIND_COMMENT_LEN - 1] = 0;
 }
 
+// NVS layout: [0xFE magic][version][count][count * BIND_BYTES]
+// Magic 0xFE > MAX_BINDINGS so we can distinguish from any pre-magic blob.
+constexpr uint8_t NVS_SCHEMA_MAGIC   = 0xFE;
+constexpr uint8_t NVS_SCHEMA_VERSION = 1;
+constexpr size_t  NVS_HEADER_BYTES   = 3;
+
 void loadConfig() {
   Preferences prefs;
   prefs.begin("kb", true);
-  uint8_t buf[1 + MAX_BINDINGS * BIND_BYTES];
+  uint8_t buf[NVS_HEADER_BYTES + MAX_BINDINGS * BIND_BYTES];
   size_t n = prefs.getBytes("binds", buf, sizeof(buf));
-  if (n >= 1 && buf[0] <= MAX_BINDINGS && n == 1 + buf[0] * BIND_BYTES) {
-    g_config.count = buf[0];
+  bool ok = false;
+  if (n >= NVS_HEADER_BYTES
+      && buf[0] == NVS_SCHEMA_MAGIC
+      && buf[1] == NVS_SCHEMA_VERSION
+      && buf[2] <= MAX_BINDINGS
+      && n == NVS_HEADER_BYTES + (size_t)buf[2] * BIND_BYTES) {
+    g_config.count = buf[2];
     for (int i = 0; i < g_config.count; i++) {
-      bindingUnpack(buf + 1 + i * BIND_BYTES, g_config.bindings[i]);
+      bindingUnpack(buf + NVS_HEADER_BYTES + i * BIND_BYTES, g_config.bindings[i]);
     }
-  } else {
+    ok = true;
+  }
+  if (!ok) {
+    // unknown / older / corrupt → fall back to default preset
     g_config = PRESET_LAZYTYPER;
   }
   g_wifiSsid = prefs.getString("ssid", "");
@@ -1056,12 +1071,14 @@ void loadConfig() {
 void saveConfig() {
   Preferences prefs;
   prefs.begin("kb", false);
-  uint8_t buf[1 + MAX_BINDINGS * BIND_BYTES];
-  buf[0] = g_config.count;
+  uint8_t buf[NVS_HEADER_BYTES + MAX_BINDINGS * BIND_BYTES];
+  buf[0] = NVS_SCHEMA_MAGIC;
+  buf[1] = NVS_SCHEMA_VERSION;
+  buf[2] = g_config.count;
   for (int i = 0; i < g_config.count; i++) {
-    bindingPack(buf + 1 + i * BIND_BYTES, g_config.bindings[i]);
+    bindingPack(buf + NVS_HEADER_BYTES + i * BIND_BYTES, g_config.bindings[i]);
   }
-  prefs.putBytes("binds", buf, 1 + g_config.count * BIND_BYTES);
+  prefs.putBytes("binds", buf, NVS_HEADER_BYTES + g_config.count * BIND_BYTES);
   prefs.end();
 }
 void saveWifi(const String& ssid, const String& pass) {
@@ -1710,7 +1727,8 @@ void handleRoot() {
   String banner;
   if (g_apMode) {
     banner = "<div class='banner banner-ap'><b>📡 AP MODE</b><br>"
-             "SSID <code>" + String(g_apSsidStr) + "</code>, then connect AP and visit <code>http://" + g_apIp + "/</code><br>"
+             "SSID <code>" + String(g_apSsidStr) + "</code> · PASS <code>" + String(g_apPass) + "</code><br>"
+             "Connect to AP, then visit <code>http://" + g_apIp + "/</code><br>"
              "<small>Fill WiFi below and save to switch to STA (AP closes).</small></div>";
   } else {
     banner = "<div class='banner banner-sta'><b>📶 STA MODE</b>, connected to <b>" + g_wifiSsid + "</b>"
@@ -1824,14 +1842,56 @@ static int jsonFindInt(const String& body, const String& key, int def = 0) {
   if (p < 0) return def;
   return body.substring(p + pat.length()).toInt();
 }
+
+// Escape-aware: handles \" inside the string and unescapes \\, \", \n, \t.
+// Returns the value of the first key match within `body`. Stops at unescaped closing ".
 static String jsonFindStr(const String& body, const String& key) {
   String pat = "\"" + key + "\":\"";
   int p = body.indexOf(pat);
   if (p < 0) return "";
-  int start = p + pat.length();
-  int end = body.indexOf('"', start);
-  if (end < 0) return "";
-  return body.substring(start, end);
+  int i = p + pat.length();
+  String out;
+  int len = (int)body.length();
+  while (i < len) {
+    char c = body[i++];
+    if (c == '\\' && i < len) {
+      char e = body[i++];
+      if      (e == 'n') out += '\n';
+      else if (e == 't') out += '\t';
+      else if (e == 'r') out += '\r';
+      else               out += e;  // \\, \", \/, etc — pass through
+    } else if (c == '"') {
+      return out;
+    } else {
+      out += c;
+    }
+  }
+  return out;  // truncated input — return what we have
+}
+
+// Find the matching '}' for the object starting at `start` (which must be '{').
+// Aware of strings (skips '{' '}' inside "..." and respects \-escapes).
+// Returns -1 if no matching brace within `body`.
+static int findJsonObjectEnd(const String& body, int start) {
+  int len = (int)body.length();
+  if (start < 0 || start >= len || body[start] != '{') return -1;
+  int depth = 0;
+  bool inStr = false, esc = false;
+  for (int i = start; i < len; i++) {
+    char c = body[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if      (c == '\\') esc = true;
+      else if (c == '"')  inStr = false;
+    } else {
+      if      (c == '"') inStr = true;
+      else if (c == '{') depth++;
+      else if (c == '}') {
+        if (--depth == 0) return i;
+      }
+    }
+  }
+  return -1;
 }
 
 void handleSave() {
@@ -1845,29 +1905,41 @@ void handleSave() {
     g_web->send(400, "text/plain", "missing bindings"); return;
   }
   int p = bArrStart + 12;
+  int bodyLen = (int)body.length();
   int count = 0;
-  while (p < (int)body.length() && count < MAX_BINDINGS) {
+  while (p < bodyLen && count < MAX_BINDINGS) {
     int objStart = body.indexOf('{', p);
     if (objStart < 0) break;
-    int objEnd = body.indexOf('}', objStart);
+    int objEnd = findJsonObjectEnd(body, objStart);
     if (objEnd < 0) break;
     String obj = body.substring(objStart, objEnd + 1);
     Binding& b = g_config.bindings[count];
-    b.trigger     = jsonFindInt(obj, "trigger", 0);
-    b.trigger_key = jsonFindInt(obj, "key", 0);
-    b.event       = jsonFindInt(obj, "event", TEV_SINGLE);
-    b.long_ms     = jsonFindInt(obj, "long_ms", LONG_PRESS_DEFAULT_MS);
+    int tr  = jsonFindInt(obj, "trigger", 0);
+    int ev  = jsonFindInt(obj, "event", TEV_SINGLE);
+    int act = jsonFindInt(obj, "action", 0);
+    int key = jsonFindInt(obj, "key", 0);
+    int lms = jsonFindInt(obj, "long_ms", LONG_PRESS_DEFAULT_MS);
+    // range-check enums; reject malformed bindings silently
+    if (tr  < TK_NONE || tr  > TK_ALT)        { p = objEnd + 1; continue; }
+    if (ev  < TEV_SINGLE || ev > TEV_LONG)    { p = objEnd + 1; continue; }
+    if (act < 0 || act > 127)                 { p = objEnd + 1; continue; }
+    if (key < 0 || key > 255)                 { p = objEnd + 1; continue; }
+    if (lms < 0) lms = 0; if (lms > 5000) lms = 5000;
+    b.trigger     = (uint8_t)tr;
+    b.trigger_key = (uint8_t)key;
+    b.event       = (uint8_t)ev;
+    b.long_ms     = (uint16_t)lms;
     b.cmd         = jsonFindInt(obj, "cmd", 0)   ? 1 : 0;
     b.opt         = jsonFindInt(obj, "opt", 0)   ? 1 : 0;
     b.ctrl        = jsonFindInt(obj, "ctrl", 0)  ? 1 : 0;
     b.shift       = jsonFindInt(obj, "shift", 0) ? 1 : 0;
-    b.action      = jsonFindInt(obj, "action", 0);
+    b.action      = (uint8_t)act;
     String cmt    = jsonFindStr(obj, "comment");
     strncpy(b.comment, cmt.c_str(), BIND_COMMENT_LEN - 1);
     b.comment[BIND_COMMENT_LEN - 1] = 0;
     if (b.trigger != TK_NONE) count++;
     p = objEnd + 1;
-    if (body[p] == ']') break;
+    if (p < bodyLen && body[p] == ']') break;
   }
   g_config.count = count;
   saveConfig();
@@ -1885,6 +1957,10 @@ void handleSave() {
   // WiFi creds
   String newSsid = jsonFindStr(body, "ssid");
   String newPass = jsonFindStr(body, "pass");
+  // 802.11 limits: SSID ≤ 32, WPA passphrase ≤ 63
+  if (newSsid.length() > 32 || newPass.length() > 63) {
+    g_web->send(400, "text/plain", "ssid/pass too long"); return;
+  }
   if (newPass.length() == 0) newPass = g_wifiPass;
   bool wifiChanged = false;
   if (newSsid.length() > 0 && (newSsid != g_wifiSsid || newPass != g_wifiPass)) {
@@ -1909,20 +1985,6 @@ void handleCancel() {
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
 
-
-static void drawApClientLine() {
-  M5Cardputer.Display.fillRect(22, 70, SCREEN_W - 22, 18, BLACK);
-  int n = WiFi.softAPgetStationNum();
-  M5Cardputer.Display.setTextSize(2);
-  M5Cardputer.Display.setCursor(28, 70);
-  if (n == 0) {
-    M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
-    M5Cardputer.Display.print("Waiting client");
-  } else {
-    M5Cardputer.Display.setTextColor(0x07E0 /* green */, BLACK);
-    M5Cardputer.Display.printf("%d client%s", n, n > 1 ? "s" : "");
-  }
-}
 
 void drawConfigScreen(const char* status, const String& ip) {
   M5Cardputer.Display.fillScreen(BLACK);
@@ -1965,13 +2027,17 @@ void drawConfigScreen(const char* status, const String& ip) {
 
   M5Cardputer.Display.setTextSize(2);
   if (g_apMode) {
+    // SSID (yellow), PASS (green), IP (cyan), client status
     M5Cardputer.Display.setTextColor(0xFFE0 /* yellow */, BLACK);
     M5Cardputer.Display.setCursor(28, 24);
-    M5Cardputer.Display.print(g_apSsidStr);  // CardPuter-KB-XXXX
-    M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
+    M5Cardputer.Display.print(g_apSsidStr);
+    M5Cardputer.Display.setTextColor(0x07E0 /* green */, BLACK);
     M5Cardputer.Display.setCursor(28, 46);
-    M5Cardputer.Display.print(ip);            // 192.168.4.1
-    drawApClientLine();
+    M5Cardputer.Display.printf("PASS %s", g_apPass);
+    M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
+    M5Cardputer.Display.setCursor(28, 68);
+    M5Cardputer.Display.print(ip);
+    // client status omitted in AP mode — bottom hints take that row now
   } else {
     // STA: IP + mDNS hostname + .local
     M5Cardputer.Display.setTextColor(0x07FF /* cyan */, BLACK);
@@ -2089,14 +2155,18 @@ static void startApMode() {
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_BT);
   snprintf(g_apSsidStr, sizeof(g_apSsidStr), "CardPuter-KB-%02x%02x", mac[4], mac[5]);
+  // Per-device WPA2 password derived from MAC. Shown on the LCD next to SSID.
+  // Open AP would let any nearby device read /api/status (WiFi creds!) and edit bindings.
+  snprintf(g_apPass,    sizeof(g_apPass),    "kb%02x%02x%02x",      mac[3], mac[4], mac[5]);
 
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(g_apSsidStr);
+  WiFi.softAP(g_apSsidStr, g_apPass);
   delay(200);
   g_apIp = WiFi.softAPIP().toString();
   g_apMode = true;
   Serial.printf("[config] AP started: %s, ip=%s\n", g_apSsidStr, g_apIp.c_str());
 
+  if (g_web) { delete g_web; g_web = nullptr; }
   g_web = new WebServer(80);
   registerWebRoutes();
   g_web->begin();
@@ -2128,6 +2198,7 @@ static bool tryStaConnect() {
     MDNS.addService("http", "tcp", 80);
     Serial.printf("[config] mDNS: %s.local\n", MDNS_NAME);
   }
+  if (g_web) { delete g_web; g_web = nullptr; }
   g_web = new WebServer(80);
   registerWebRoutes();
   g_web->begin();
@@ -2209,16 +2280,6 @@ void configModeLoop() {
     }
   }
 
-  static unsigned long lastApRefresh = 0;
-  static int lastStationNum = -1;
-  if (g_apMode && millis() - lastApRefresh > 1000) {
-    int n = WiFi.softAPgetStationNum();
-    if (n != lastStationNum) {
-      drawApClientLine();
-      lastStationNum = n;
-    }
-    lastApRefresh = millis();
-  }
   delay(2);
 }
 
@@ -2250,9 +2311,14 @@ void setup() {
   g_canvas.setPsram(true);
   g_banner.setPsram(true);
   g_restore.setPsram(true);
-  g_canvas.createSprite(SCREEN_W, SCREEN_H);
-  g_banner.createSprite(FLASH_BANNER_W, FLASH_BANNER_H);
-  g_restore.createSprite(FLASH_BANNER_W, FLASH_BANNER_H);
+  bool sprOK = g_canvas.createSprite(SCREEN_W, SCREEN_H)
+            && g_banner.createSprite(FLASH_BANNER_W, FLASH_BANNER_H)
+            && g_restore.createSprite(FLASH_BANNER_W, FLASH_BANNER_H);
+  if (!sprOK) {
+    Serial.println("[boot] sprite alloc FAILED — restarting");
+    delay(500);
+    esp_restart();
+  }
   Serial.printf("[boot] firmware: %s\n", FIRMWARE_VERSION);
   Serial.println("[boot] M5Cardputer ok");
 
