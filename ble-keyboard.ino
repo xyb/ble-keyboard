@@ -1681,12 +1681,16 @@ void handleRoot() {
   body += ".io-btn:hover{background:#f3f4f6}";
   body += "table.bind-table tr.bind-row.conflict td,table.bind-table tr.bind-cmt-row.conflict td{background:#fef2f2}";
   body += "table.bind-table tr.bind-row.conflict td:first-child{box-shadow:inset 3px 0 0 #dc2626}";
-  body += ".lang-switch{position:absolute;top:.6em;right:.8em;display:flex;gap:.3em}";
+  body += ".title-bar{display:flex;align-items:center;justify-content:space-between;gap:1em;flex-wrap:wrap}";
+  body += ".title-bar h2{margin:0}";
+  body += ".lang-switch{display:flex;gap:.3em;flex-shrink:0}";
   body += ".lang-switch button{background:#fff;color:#374151;border:1px solid #d1d5db;border-radius:3px;padding:.2em .55em;cursor:pointer;font-size:.85em;width:auto}";
   body += ".lang-switch button.active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}";
   body += "</style></head><body>";
-  body += "<div class='lang-switch'><button type='button' id='lang-en' onclick='applyLang(\"en\")'>EN</button><button type='button' id='lang-zh' onclick='applyLang(\"zh\")'>中文</button></div>";
+  body += "<div class='title-bar'>";
   body += "<h2 data-i18n='title'>CardPuter Keyboard Config</h2>";
+  body += "<div class='lang-switch'><button type='button' id='lang-en' onclick='applyLang(\"en\")'>EN</button><button type='button' id='lang-zh' onclick='applyLang(\"zh\")'>中文</button></div>";
+  body += "</div>";
 
   body += "[BANNER]";
 
