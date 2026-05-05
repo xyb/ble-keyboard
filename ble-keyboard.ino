@@ -1547,6 +1547,7 @@ const char JS_CODE[] =
 "if(cfg.last_preset)sel.value=cfg.last_preset;"
 "document.getElementById('binds').addEventListener('change',highlightConflicts);"
 "highlightConflicts();"
+"applyLang(lang);"
 "}"
 "function highlightConflicts(){"
 "const rows=document.querySelectorAll('.bind-row');"
@@ -1565,7 +1566,7 @@ const char JS_CODE[] =
 "return conflicts.size;"
 "}"
 "async function saveAll(){"
-"if(highlightConflicts()>0){if(!confirm('Conflicts exist (red rows). Save anyway?'))return;}"
+"if(highlightConflicts()>0){if(!confirm(t('conflict_confirm')))return;}"
 "const data={"
 "ssid:document.getElementById('ssid').value,"
 "pass:document.getElementById('pass').value,"
@@ -1573,7 +1574,7 @@ const char JS_CODE[] =
 "bindings:collectBindings()"
 "};"
 "const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});"
-"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>Saved. Rebooting...</h2>\";"
+"document.body.innerHTML='<h2 style=\"text-align:center;margin-top:3em\">'+t('saving')+'</h2>';"
 "}"
 "function exportConfig(){"
 "const cfg={last_preset:document.getElementById('preset').value||'',bindings:collectBindings()};"
@@ -1585,29 +1586,29 @@ const char JS_CODE[] =
 "URL.revokeObjectURL(a.href);"
 "}"
 "function importConfig(){"
-"const txt=prompt('Paste JSON config (exported format):');"
+"const txt=prompt(t('import_prompt'));"
 "if(!txt)return;"
 "try{const cfg=JSON.parse(txt);"
 "if(!cfg.bindings||!Array.isArray(cfg.bindings))throw new Error('missing bindings array');"
 "loadBindings(cfg.bindings);"
 "if(cfg.last_preset)document.getElementById('preset').value=cfg.last_preset;"
 "highlightConflicts();"
-"alert('Loaded. Click Save & Reboot to apply.');"
-"}catch(e){alert('Parse failed: '+e.message);}"
+"alert(t('import_loaded'));"
+"}catch(e){alert(t('parse_failed')+e.message);}"
 "}"
 "async function cancelAll(){"
 "await fetch('/cancel',{method:'POST'});"
-"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>Rebooting...</h2>\";"
+"document.body.innerHTML='<h2 style=\"text-align:center;margin-top:3em\">'+t('rebooting')+'</h2>';"
 "}"
 "async function switchToAp(){"
-"if(!confirm('Device will reboot into AP mode.\\nNext config-mode entry still tries STA first. Continue?'))return;"
+"if(!confirm(t('ap_confirm')))return;"
 "await fetch('/api/switch-to-ap',{method:'POST'});"
-"document.body.innerHTML=\"<h2 style='text-align:center;margin-top:3em'>Switching to AP...<br><small>Connect to CardPuter-KB-XXXX WiFi then visit http://192.168.4.1/</small></h2>\";"
+"document.body.innerHTML='<h2 style=\"text-align:center;margin-top:3em\">'+t('switching_ap')+'</h2>';"
 "}"
 "async function scanWifi(){"
-"const el=document.getElementById('wifi-list');el.textContent='Scanning...';"
+"const el=document.getElementById('wifi-list');el.textContent=t('scanning');"
 "try{const r=await fetch('/api/wifi/scan');const nets=await r.json();"
-"if(!nets.length){el.textContent='No WiFi found';return}"
+"if(!nets.length){el.textContent=t('no_wifi');return}"
 "el.innerHTML='';"
 "const bars=(r)=>{const lvl=r>=-50?4:r>=-60?3:r>=-70?2:r>=-80?1:0;return '▰'.repeat(lvl)+'▱'.repeat(4-lvl);};"
 "const barColor=(r)=>r>=-60?'#10b981':r>=-75?'#f59e0b':'#dc2626';"
@@ -1621,7 +1622,7 @@ const char JS_CODE[] =
 "a.onclick=(e)=>{e.preventDefault();document.getElementById('ssid').value=n.ssid;document.getElementById('pass').focus();};"
 "el.appendChild(a);"
 "}"
-"}catch(e){el.textContent='Scan failed: '+e}"
+"}catch(e){el.textContent=t('scan_failed')+e}"
 "}"
 "init();";
 
@@ -1680,48 +1681,54 @@ void handleRoot() {
   body += ".io-btn:hover{background:#f3f4f6}";
   body += "table.bind-table tr.bind-row.conflict td,table.bind-table tr.bind-cmt-row.conflict td{background:#fef2f2}";
   body += "table.bind-table tr.bind-row.conflict td:first-child{box-shadow:inset 3px 0 0 #dc2626}";
+  body += ".lang-switch{position:absolute;top:.6em;right:.8em;display:flex;gap:.3em}";
+  body += ".lang-switch button{background:#fff;color:#374151;border:1px solid #d1d5db;border-radius:3px;padding:.2em .55em;cursor:pointer;font-size:.85em;width:auto}";
+  body += ".lang-switch button.active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}";
   body += "</style></head><body>";
-  body += "<h2>CardPuter Keyboard Config</h2>";
+  body += "<div class='lang-switch'><button type='button' id='lang-en' onclick='applyLang(\"en\")'>EN</button><button type='button' id='lang-zh' onclick='applyLang(\"zh\")'>中文</button></div>";
+  body += "<h2 data-i18n='title'>CardPuter Keyboard Config</h2>";
 
   body += "[BANNER]";
 
-  body += "<fieldset><legend>Preset (one-click load below)</legend>";
+  body += "<fieldset><legend data-i18n='preset_legend'>Preset (one-click load below)</legend>";
   body += "<select id='preset' onchange='loadPreset(this.value)'>";
-  body += "<option value=''>-- Select preset --</option>";
+  body += "<option value='' data-i18n='preset_placeholder'>-- Select preset --</option>";
   body += "</select>";
   body += "</fieldset>";
 
-  body += "<fieldset><legend>WiFi (home network)</legend>";
+  body += "<fieldset><legend data-i18n='wifi_legend'>WiFi (home network)</legend>";
   body += "<label>SSID</label><input id='ssid' value='";
   body += g_wifiSsid;
   body += "'>";
-  body += "<label>Password</label><input id='pass' type='password' placeholder='";
+  body += "<label data-i18n='password_label'>Password</label><input id='pass' type='password' data-i18n-ph='";
+  body += g_wifiPass.length() > 0 ? "password_placeholder_kept" : "";
+  body += "' placeholder='";
   body += g_wifiPass.length() > 0 ? "(saved, leave blank to keep)" : "";
   body += "'>";
-  body += "<button type='button' class='scan' onclick='scanWifi()'>Scan WiFi</button>";
+  body += "<button type='button' class='scan' data-i18n='scan_wifi' onclick='scanWifi()'>Scan WiFi</button>";
   body += "<div id='wifi-list'></div>";
   body += "</fieldset>";
 
-  body += "<fieldset><legend>Bindings (one row = trigger → action)</legend>";
+  body += "<fieldset><legend data-i18n='bindings_legend'>Bindings (one row = trigger → action)</legend>";
   body += "<table class='bind-table'><thead><tr>";
-  body += "<th class='col-trig'>Trigger</th>";
-  body += "<th class='col-event'>Event</th>";
+  body += "<th class='col-trig' data-i18n='col_trigger'>Trigger</th>";
+  body += "<th class='col-event' data-i18n='col_event'>Event</th>";
   body += "<th class='col-mod'>Cmd</th><th class='col-mod'>Opt</th><th class='col-mod'>Ctrl</th><th class='col-mod'>Shift</th>";
-  body += "<th class='col-act'>Action</th>";
+  body += "<th class='col-act' data-i18n='col_action'>Action</th>";
   body += "<th class='col-del'></th>";
   body += "</tr></thead><tbody id='binds'></tbody></table>";
-  body += "<div id='conflict-banner' style='display:none;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;padding:.5em .8em;border-radius:4px;margin-top:.5em;font-size:.9em'>";
+  body += "<div id='conflict-banner' style='display:none;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;padding:.5em .8em;border-radius:4px;margin-top:.5em;font-size:.9em' data-i18n='conflict_banner'>";
   body += "Red rows have duplicate triggers — please review before save";
   body += "</div>";
   body += "<div style='margin-top:.5em;display:flex;gap:.5em;flex-wrap:wrap;align-items:center'>";
-  body += "<button type='button' class='add-btn' onclick='addRow()'>+ Add binding</button>";
-  body += "<button type='button' class='io-btn' onclick='exportConfig()'>Export JSON</button>";
-  body += "<button type='button' class='io-btn' onclick='importConfig()'>Import JSON</button>";
+  body += "<button type='button' class='add-btn' data-i18n='add_binding' onclick='addRow()'>+ Add binding</button>";
+  body += "<button type='button' class='io-btn' data-i18n='export_json' onclick='exportConfig()'>Export JSON</button>";
+  body += "<button type='button' class='io-btn' data-i18n='import_json' onclick='importConfig()'>Import JSON</button>";
   body += "</div>";
   body += "</fieldset>";
 
-  body += "<button class='save' type='button' onclick='saveAll()'>Save & Reboot</button>";
-  body += "<button class='reboot' type='button' onclick='cancelAll()'>Cancel & Reboot</button>";
+  body += "<button class='save' type='button' data-i18n='save_reboot' onclick='saveAll()'>Save & Reboot</button>";
+  body += "<button class='reboot' type='button' data-i18n='cancel_reboot' onclick='cancelAll()'>Cancel & Reboot</button>";
 
   // banner
   String banner;
@@ -1741,6 +1748,20 @@ void handleRoot() {
 
   // ===== JS =====
   body += "<script>";
+
+  // ----- i18n: dictionary + applyLang() + lang init from localStorage / browser -----
+  body += "const I18N={";
+  body += "en:{title:'CardPuter Keyboard Config',preset_legend:'Preset (one-click load below)',preset_placeholder:'-- Select preset --',wifi_legend:'WiFi (home network)',password_label:'Password',password_placeholder_kept:'(saved, leave blank to keep)',scan_wifi:'Scan WiFi',bindings_legend:'Bindings (one row = trigger \\u2192 action)',col_trigger:'Trigger',col_event:'Event',col_action:'Action',conflict_banner:'Red rows have duplicate triggers \\u2014 please review before save',add_binding:'+ Add binding',export_json:'Export JSON',import_json:'Import JSON',save_reboot:'Save & Reboot',cancel_reboot:'Cancel & Reboot',comment_placeholder:'Note (optional, ~60 chars)',del_binding:'Delete this binding',long_ms_title:'Long press ms',group_modifiers:'Modifiers',group_special:'Special',group_function:'Function',group_letters:'Letters a-z',group_digits:'Digits 0-9',group_symbols:'Symbols',ev_single:'Single',ev_double:'Double',ev_triple:'Triple',ev_long:'Long',saving:'Saved. Rebooting...',rebooting:'Rebooting...',switching_ap:'Switching to AP...',conflict_confirm:'Conflicts exist (red rows). Save anyway?',import_prompt:'Paste JSON config (exported format):',import_loaded:'Loaded. Click Save & Reboot to apply.',parse_failed:'Parse failed: ',ap_confirm:'Device will reboot into AP mode.\\nNext config-mode entry still tries STA first. Continue?',scanning:'Scanning...',no_wifi:'No WiFi found',scan_failed:'Scan failed: '},";
+  body += "zh:{title:'CardPuter \\u952E\\u76D8\\u914D\\u7F6E',preset_legend:'\\u9884\\u8BBE\\u65B9\\u6848\\uFF08\\u4E00\\u952E\\u8F7D\\u5165\\u4E0B\\u65B9\\u8868\\u5355\\uFF09',preset_placeholder:'-- \\u9009\\u62E9\\u9884\\u8BBE --',wifi_legend:'WiFi\\uFF08\\u5BB6\\u5EAD\\u7F51\\u7EDC\\uFF09',password_label:'\\u5BC6\\u7801',password_placeholder_kept:'\\uFF08\\u5DF2\\u5B58\\uFF0C\\u7559\\u7A7A\\u4FDD\\u7559\\uFF09',scan_wifi:'\\u626B\\u63CFWiFi',bindings_legend:'\\u952E\\u6620\\u5C04\\uFF08\\u6BCF\\u884C = \\u4E00\\u4E2A\\u89E6\\u53D1 \\u2192 \\u52A8\\u4F5C\\uFF09',col_trigger:'\\u89E6\\u53D1\\u952E',col_event:'\\u4E8B\\u4EF6',col_action:'\\u4E3B\\u952E',conflict_banner:'\\u7EA2\\u8272\\u884C\\u5B58\\u5728\\u91CD\\u590D\\u89E6\\u53D1\\uFF0C\\u4FDD\\u5B58\\u524D\\u8BF7\\u68C0\\u67E5',add_binding:'+ \\u589E\\u52A0\\u6620\\u5C04',export_json:'\\u5BFC\\u51FAJSON',import_json:'\\u5BFC\\u5165JSON',save_reboot:'\\u4FDD\\u5B58\\u5E76\\u91CD\\u542F',cancel_reboot:'\\u53D6\\u6D88\\u5E76\\u91CD\\u542F',comment_placeholder:'\\u8BF4\\u660E\\uFF08\\u53EF\\u9009\\uFF0C\\u7EA6 60 \\u5B57\\u7B26\\uFF09',del_binding:'\\u5220\\u9664\\u6B64\\u6620\\u5C04',long_ms_title:'\\u957F\\u6309\\u6BEB\\u79D2',group_modifiers:'\\u4FEE\\u9970\\u952E',group_special:'\\u7279\\u6B8A',group_function:'\\u529F\\u80FD',group_letters:'\\u5B57\\u6BCDa-z',group_digits:'\\u6570\\u5B570-9',group_symbols:'\\u7B26\\u53F7',ev_single:'\\u5355\\u51FB',ev_double:'\\u53CC\\u51FB',ev_triple:'\\u4E09\\u51FB',ev_long:'\\u957F\\u6309',saving:'\\u5DF2\\u4FDD\\u5B58\\uFF0C\\u91CD\\u542F\\u4E2D...',rebooting:'\\u91CD\\u542F\\u4E2D...',switching_ap:'\\u5207\\u6362\\u5230 AP...',conflict_confirm:'\\u5B58\\u5728\\u51B2\\u7A81\\uFF08\\u7EA2\\u8272\\u884C\\uFF09\\uFF0C\\u4ECD\\u8981\\u4FDD\\u5B58\\uFF1F',import_prompt:'\\u7C98\\u8D34 JSON \\u914D\\u7F6E\\uFF08\\u5BFC\\u51FA\\u683C\\u5F0F\\uFF09\\uFF1A',import_loaded:'\\u5DF2\\u52A0\\u8F7D\\uFF0C\\u8BF7\\u70B9\\u51FB\\u4FDD\\u5B58\\u5E76\\u91CD\\u542F\\u4EE5\\u5E94\\u7528\\u3002',parse_failed:'\\u89E3\\u6790\\u5931\\u8D25\\uFF1A',ap_confirm:'\\u8BBE\\u5907\\u4F1A\\u91CD\\u542F\\u8FDB\\u5165 AP \\u6A21\\u5F0F\\u3002\\n\\u4E0B\\u6B21\\u8FDB\\u914D\\u7F6E\\u4ECD\\u4F18\\u5148\\u8D70 STA\\u3002\\u7EE7\\u7EED\\uFF1F',scanning:'\\u626B\\u63CF\\u4E2D...',no_wifi:'\\u672A\\u627E\\u5230 WiFi',scan_failed:'\\u626B\\u63CF\\u5931\\u8D25\\uFF1A'}";
+  body += "};";
+  body += "let lang=localStorage.getItem('lang')||(navigator.language&&navigator.language.startsWith('zh')?'zh':'en');";
+  body += "function t(k){return (I18N[lang]&&I18N[lang][k])||k}";
+  body += "function applyLang(l){lang=l;localStorage.setItem('lang',l);"
+          "document.querySelectorAll('[data-i18n]').forEach(e=>{const k=e.dataset.i18n;if(I18N[lang][k])e.textContent=I18N[lang][k];});"
+          "document.querySelectorAll('[data-i18n-ph]').forEach(e=>{const k=e.dataset.i18nPh;if(I18N[lang][k])e.placeholder=I18N[lang][k];});"
+          "document.getElementById('lang-en').classList.toggle('active',l=='en');"
+          "document.getElementById('lang-zh').classList.toggle('active',l=='zh');"
+          "}";
 
   body += "const AK_OPTS=[";
   body += "{g:'Special',o:[";
